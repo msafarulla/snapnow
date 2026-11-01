@@ -2855,8 +2855,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     final items = <(String, IconData, String)>[
       for (final t in _toolOrder) if (_visibleTools.contains(t)) (t.name, _toolInfo[t]!.$1, _toolInfo[t]!.$2),
       for (final t in _toolOrder) if (!_visibleTools.contains(t)) (t.name, _toolInfo[t]!.$1, _toolInfo[t]!.$2),
-      ('overlay', Icons.add_photo_alternate_outlined, 'Add Image…'),
-      ('logo', Icons.business_outlined, 'Insert Logo…'),
+      ('overlay', Icons.add_photo_alternate_outlined, 'Image'),
+      ('logo', Icons.business_outlined, 'Logo'),
       ('whiteboard', Icons.dashboard_outlined, 'Excalidraw'),
       ('excalidraw', Icons.open_in_new, 'Open in Excalidraw…'),
       if (!Platform.isMacOS) ...[
