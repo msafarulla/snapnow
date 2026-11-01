@@ -1,6 +1,5 @@
 import Cocoa
 import ScreenCaptureKit
-
 /// Region capture in the style of Snagit: the screen freezes and dims, dashed crosshair lines follow the
 /// cursor, the window under it is outlined, and a magnifier shows the pixels and the size. Drag for an
 /// area, click for the outlined window (or the whole screen), Esc cancels. Drags stay on the screen they
@@ -32,6 +31,7 @@ final class RegionCapture {
     private var antsTimer: Timer?
     var dragStart: CGPoint?
     var dragScreen: NSScreen?
+    var lastDrag: CGPoint?   // where the last mouseDragged put the cursor (the true end of a drag; see mouseUp)
 
     /// `fallback` runs instead when the screen can't be frozen (no image, or a blank one).
     static func start(to url: URL, sound: Bool, delay: Int = 0, completion: @escaping (URL?) -> Void, fallback: @escaping () -> Void) {
@@ -547,17 +547,28 @@ private final class RegionView: NSView {
     override func mouseDown(with event: NSEvent) {
         capture.mouse = NSEvent.mouseLocation
         capture.dragStart = capture.mouse
+        capture.lastDrag = nil
         capture.dragScreen = capture.screenUnderMouse()
         capture.redraw()
     }
 
     override func mouseDragged(with event: NSEvent) {
         capture.mouse = NSEvent.mouseLocation
+        capture.lastDrag = capture.mouse
         capture.redraw()
     }
 
     override func mouseUp(with event: NSEvent) {
-        capture.mouse = NSEvent.mouseLocation
+        let here = NSEvent.mouseLocation
+        // Releasing inside the auto-hiding Dock's strip: macOS reports the release at the Dock's top edge
+        // (y ≈ 77), far from where the drag actually was, with no drag events in between — so the box bottom
+        // would snap there and cut whatever sat in the Dock. A genuine release never jumps that far from the
+        // last drag, so a big discontinuity means interference: the last drag position is where you let go.
+        if let last = capture.lastDrag, hypot(here.x - last.x, here.y - last.y) > 8 {
+            capture.mouse = last
+        } else {
+            capture.mouse = here
+        }
         capture.mouseUp()
     }
 
@@ -597,11 +608,17 @@ enum CaptureStamp {
         let text = df.string(from: Date()) as NSString
         // Light and subtle (no pill, no shadow); the colour adapts to the pixels under it so it stays legible
         // on a white capture as well as a dark one.
-        let fontSize = max(11 * scale, CGFloat(h) * 0.013)
-        // Monospaced digits read cleanly as a timestamp and keep an even width.
-        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
-        let ts = text.size(withAttributes: [.font: font])
         let margin = min(CGFloat(w), CGFloat(h)) * 0.02   // nestle into the (rounded) bottom-right corner
+        // Monospaced digits read cleanly as a timestamp and keep an even width.
+        func measure(_ s: CGFloat) -> CGSize { text.size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: s, weight: .medium)]) }
+        var fontSize = max(11 * scale, CGFloat(h) * 0.013)
+        var ts = measure(fontSize)
+        // Shrink the stamp so it always fits inside the capture instead of overflowing a small image (its left
+        // end getting clipped) or swamping it. On an image too small to carry it legibly, drop it entirely.
+        let avail = CGFloat(w) - margin * 2
+        if ts.width > avail, ts.width > 0 { fontSize *= avail / ts.width; ts = measure(fontSize) }
+        guard fontSize >= 7 * scale, ts.height <= CGFloat(h) * 0.5 else { return ctx.makeImage() }
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
         let region = CGRect(x: CGFloat(w) - ts.width - margin, y: CGFloat(h) - ts.height - margin, width: ts.width, height: ts.height)
         let onLight = averageLuminance(of: image, in: region) > 0.6
         let attrs: [NSAttributedString.Key: Any] = [

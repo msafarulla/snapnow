@@ -87,18 +87,31 @@ class _ExcalidrawPageState extends State<ExcalidrawPage> {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Excalidraw'),
+        toolbarHeight: 34,
+        titleSpacing: 10,
+        title: const Text('Excalidraw', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         actions: [
           TextButton.icon(
-            icon: const Icon(Icons.ios_share, size: 18),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 28),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            icon: const Icon(Icons.ios_share, size: 15),
             label: const Text('Send to SnapNow'),
             onPressed: !_ready ? null : () => _web?.evaluateJavascript(source: "window.snapnow && window.snapnow.exportPng()"),
           ),
           IconButton(
             tooltip: 'Close',
+            iconSize: 16,
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            constraints: const BoxConstraints(),
             icon: const Icon(Icons.close),
             onPressed: () => Navigator.of(context).maybePop(),
           ),
+          const SizedBox(width: 6),
         ],
       ),
       body: Container(
