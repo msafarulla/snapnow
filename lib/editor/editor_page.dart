@@ -1363,6 +1363,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         .where((a) => a.startsWith('assets/logos/') && _logoExts.any((e) => a.toLowerCase().endsWith(e)))
         .toList()
       ..sort();
+    // Built-in logos the user removed: they can't be deleted from the app bundle, so they're hidden by path
+    // (newline-joined in the `logos.hidden` pref) and come back with "Restore built-ins".
+    final hidden = <String>{
+      ...((await Native.getString('logos.hidden').catchError((_) => null)) ?? '').split('\n').where((s) => s.isNotEmpty),
+    };
     if (!mounted) return;
     // Result: (isAsset, path) — asset path for bundled, file path for user logos.
     final picked = await showDialog<(bool, String)>(
@@ -1378,9 +1383,25 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
               .toList()
             ..sort();
           final entries = <(bool, String)>[
-            for (final a in bundled) (true, a),
+            for (final a in bundled) if (!hidden.contains(a)) (true, a),
             for (final p in files) (false, p),
           ];
+          // Removes a logo: a user file is deleted; a built-in is hidden (restorable with "Restore built-ins").
+          Future<void> remove(bool isAsset, String path) async {
+            final name = path.split('/').last.replaceFirst(RegExp(r'\.[^.]+$'), '');
+            try {
+              if (isAsset) {
+                hidden.add(path);
+                await Native.setString('logos.hidden', hidden.join('\n'));
+              } else {
+                await File(path).delete();
+              }
+              setInner(() {});
+              await Native.toast('Removed $name', symbol: 'trash.fill');
+            } catch (_) {
+              await Native.toast("Couldn't remove $name", symbol: 'exclamationmark.triangle.fill');
+            }
+          }
           Future<void> importAndRefresh(Iterable<String> paths) async {
             final n = await _importLogoFiles(paths);
             if (n > 0) setInner(() {});
@@ -1419,21 +1440,49 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                         itemBuilder: (_, i) {
                           final (isAsset, path) = entries[i];
                           final name = path.split('/').last.replaceFirst(RegExp(r'\.[^.]+$'), '');
-                          return Tooltip(
-                            message: name,
-                            waitDuration: const Duration(milliseconds: 400),
-                            child: InkWell(
-                              onTap: () => Navigator.pop(ctx, (isAsset, path)),
-                              borderRadius: BorderRadius.circular(8),
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                    color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(8)),
-                                child: isAsset
-                                    ? Image.asset(path, fit: BoxFit.contain)
-                                    : Image.file(File(path), fit: BoxFit.contain),
+                          return Stack(
+                            children: [
+                              Positioned.fill(
+                                child: Tooltip(
+                                  message: name,
+                                  waitDuration: const Duration(milliseconds: 400),
+                                  child: InkWell(
+                                    onTap: () => Navigator.pop(ctx, (isAsset, path)),
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                          color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(8)),
+                                      child: isAsset
+                                          ? Image.asset(path, fit: BoxFit.contain)
+                                          : Image.file(File(path), fit: BoxFit.contain),
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
+                              // Remove this logo: a user file is deleted; a built-in is hidden (restorable).
+                              Positioned(
+                                top: 2,
+                                right: 2,
+                                child: Tooltip(
+                                  message: isAsset ? 'Hide this built-in logo' : 'Delete this logo',
+                                  waitDuration: const Duration(milliseconds: 400),
+                                  child: InkWell(
+                                    onTap: () => remove(isAsset, path),
+                                    customBorder: const CircleBorder(),
+                                    child: Container(
+                                      width: 20,
+                                      height: 20,
+                                      decoration: BoxDecoration(
+                                          color: scheme.surface.withValues(alpha: 0.92),
+                                          shape: BoxShape.circle,
+                                          border: Border.all(color: scheme.outlineVariant)),
+                                      child: Icon(Icons.close, size: 13, color: scheme.onSurfaceVariant),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           );
                         },
                       ),
@@ -1442,6 +1491,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                 ),
               ),
             actions: [
+              if (hidden.isNotEmpty)
+                TextButton.icon(
+                  icon: const Icon(Icons.restore, size: 16),
+                  label: const Text('Restore built-ins'),
+                  onPressed: () async {
+                    hidden.clear();
+                    await Native.setString('logos.hidden', '');
+                    setInner(() {});
+                  },
+                ),
               TextButton.icon(
                 icon: const Icon(Icons.content_paste, size: 16),
                 label: const Text('Paste'),
