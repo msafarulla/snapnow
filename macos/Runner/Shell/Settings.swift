@@ -1,5 +1,6 @@
 import AppKit
 import ServiceManagement
+import UniformTypeIdentifiers
 
 /// UserDefaults keys shared by the menu bar menu and the Settings window.
 enum Prefs {
@@ -13,6 +14,16 @@ enum Prefs {
     static let gifFpsChoices = ["50", "25", "15"]
     /// Area capture re-offers the last region (outlined; Enter or a click inside re-captures it). Default on.
     static let rememberArea = "regionCapture.rememberArea"
+    /// Burns the capture's date & time into the bottom-right corner. Default on.
+    static let stampTime = "capture.stampTime"
+    /// Watermark stamped on captures (text and/or image), all configurable; off by default.
+    static let wmEnabled = "watermark.enabled"
+    static let wmText = "watermark.text"
+    static let wmImage = "watermark.imagePath"        // copied into Application Support; stable path
+    static let wmPlacement = "watermark.placement"    // bottomRight | center | tiled
+    static let wmOpacity = "watermark.opacity"        // 10…100 (percent); default 30
+    static let wmPlacements = ["bottomRight", "center", "tiled"]
+    static var wmOpacityValue: Int { UserDefaults.standard.object(forKey: wmOpacity) == nil ? 30 : UserDefaults.standard.integer(forKey: wmOpacity) }
 
     /// A bool pref that defaults to true when it has never been set (plain `bool(forKey:)` would read false).
     static func onByDefault(_ key: String) -> Bool {
@@ -125,6 +136,8 @@ final class SettingsWindowController: NSWindowController {
                                           action: #selector(prefToggled(_:)), key: Prefs.microphone))
         stack.addArrangedSubview(checkbox("Remember the last capture area (Enter re-captures it)", on: Prefs.onByDefault(Prefs.rememberArea),
                                           action: #selector(prefToggled(_:)), key: Prefs.rememberArea))
+        stack.addArrangedSubview(checkbox("Stamp the date & time on captures (bottom-right)", on: Prefs.onByDefault(Prefs.stampTime),
+                                          action: #selector(prefToggled(_:)), key: Prefs.stampTime))
         stack.addArrangedSubview(checkbox("Open SnapNow at login", on: SMAppService.mainApp.status == .enabled,
                                           action: #selector(loginToggled(_:))))
         let format = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -142,6 +155,40 @@ final class SettingsWindowController: NSWindowController {
         fps.action = #selector(gifFpsChosen(_:))
         stack.addArrangedSubview(row("GIF frame rate", fps))
         stack.addArrangedSubview(note("For Save as Animated GIF and ⇧⌘C. More frames look smoother; fewer make smaller files."))
+
+        // Watermark
+        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(heading("Watermark"))
+        stack.addArrangedSubview(checkbox("Add a watermark to captures", on: defaults.bool(forKey: Prefs.wmEnabled),
+                                          action: #selector(prefToggled(_:)), key: Prefs.wmEnabled))
+        let wmTextField = NSTextField(string: defaults.string(forKey: Prefs.wmText) ?? "")
+        wmTextField.placeholderString = "Watermark text"
+        wmTextField.target = self
+        wmTextField.action = #selector(watermarkTextChanged(_:))
+        wmTextField.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        stack.addArrangedSubview(row("Text", wmTextField))
+        let imgName = NSTextField(labelWithString: Self.wmImageName())
+        imgName.font = Theme.font(12)
+        imgName.textColor = Theme.dimText
+        watermarkImageLabel = imgName
+        let chooseImg = NSButton(title: "Choose…", target: self, action: #selector(chooseWatermarkImage))
+        chooseImg.bezelStyle = .rounded
+        let clearImg = NSButton(title: "Clear", target: self, action: #selector(clearWatermarkImage))
+        clearImg.bezelStyle = .rounded
+        let imgRow = NSStackView(views: [chooseImg, clearImg, imgName])
+        imgRow.spacing = 8
+        imgRow.alignment = .centerY
+        stack.addArrangedSubview(row("Image", imgRow))
+        let placement = NSPopUpButton(frame: .zero, pullsDown: false)
+        placement.addItems(withTitles: ["Bottom-right", "Centered", "Tiled"])
+        placement.selectItem(at: Prefs.wmPlacements.firstIndex(of: defaults.string(forKey: Prefs.wmPlacement) ?? "bottomRight") ?? 0)
+        placement.target = self
+        placement.action = #selector(watermarkPlacementChosen(_:))
+        stack.addArrangedSubview(row("Placement", placement))
+        let opacity = NSSlider(value: Double(Prefs.wmOpacityValue), minValue: 10, maxValue: 100, target: self, action: #selector(watermarkOpacityChanged(_:)))
+        opacity.widthAnchor.constraint(equalToConstant: 180).isActive = true
+        stack.addArrangedSubview(row("Opacity", opacity))
+        stack.addArrangedSubview(note("Your text and/or image are stamped on every capture at the chosen spot and opacity."))
 
         // Shortcuts
         stack.addArrangedSubview(separator())
@@ -250,6 +297,55 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func gifFpsChosen(_ sender: NSPopUpButton) {
         UserDefaults.standard.set(Prefs.gifFpsChoices[sender.indexOfSelectedItem], forKey: Prefs.gifFps)
+    }
+
+    // MARK: Watermark
+
+    private weak var watermarkImageLabel: NSTextField?
+
+    /// The user's watermark image is copied here (a stable path that survives the original being moved).
+    static func watermarkDir() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("SnapNow", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func wmImageName() -> String {
+        let p = UserDefaults.standard.string(forKey: Prefs.wmImage) ?? ""
+        return p.isEmpty ? "None" : (p as NSString).lastPathComponent
+    }
+
+    @objc private func watermarkTextChanged(_ sender: NSTextField) {
+        UserDefaults.standard.set(sender.stringValue, forKey: Prefs.wmText)
+    }
+
+    @objc private func watermarkPlacementChosen(_ sender: NSPopUpButton) {
+        UserDefaults.standard.set(Prefs.wmPlacements[sender.indexOfSelectedItem], forKey: Prefs.wmPlacement)
+    }
+
+    @objc private func watermarkOpacityChanged(_ sender: NSSlider) {
+        UserDefaults.standard.set(Int(sender.doubleValue.rounded()), forKey: Prefs.wmOpacity)
+    }
+
+    @objc private func chooseWatermarkImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let src = panel.url else { return }
+        let ext = src.pathExtension.isEmpty ? "png" : src.pathExtension
+        let dest = Self.watermarkDir().appendingPathComponent("watermark.\(ext)")
+        for old in (try? FileManager.default.contentsOfDirectory(at: Self.watermarkDir(), includingPropertiesForKeys: nil)) ?? [] where old.lastPathComponent.hasPrefix("watermark.") {
+            try? FileManager.default.removeItem(at: old)
+        }
+        do { try FileManager.default.copyItem(at: src, to: dest) } catch { return }
+        UserDefaults.standard.set(dest.path, forKey: Prefs.wmImage)
+        watermarkImageLabel?.stringValue = dest.lastPathComponent
+    }
+
+    @objc private func clearWatermarkImage() {
+        UserDefaults.standard.removeObject(forKey: Prefs.wmImage)
+        watermarkImageLabel?.stringValue = "None"
     }
 
     /// Rejects reserved and duplicate combinations; otherwise saves, which re-registers the hotkeys.

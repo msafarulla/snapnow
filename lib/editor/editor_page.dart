@@ -1253,6 +1253,27 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     return added;
   }
 
+  /// Saves a pasted/clipboard image into the user logos dir (collision-safe name); returns 1 if added, else 0.
+  Future<int> _importLogoBytes(Uint8List bytes, {String stem = 'pasted-logo'}) async {
+    if (bytes.isEmpty || bytes.length > 20 * 1024 * 1024) return 0;
+    try {
+      (await (await ui.instantiateImageCodec(bytes)).getNextFrame()).image.dispose(); // must be a real image
+    } catch (_) {
+      return 0;
+    }
+    final dir = await _userLogosDir();
+    var dest = '${dir.path}/$stem.png';
+    for (var n = 1; File(dest).existsSync(); n++) {
+      dest = '${dir.path}/$stem-$n.png';
+    }
+    try {
+      await File(dest).writeAsBytes(bytes, flush: true);
+      return 1;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   /// A grid of logos — those bundled under `assets/logos/` plus any the user has added — that you can grow by
   /// dragging image files onto the dialog or via the Add button; the chosen one drops onto the canvas as a
   /// movable, resizable overlay (the same as Add Image).
@@ -1285,18 +1306,34 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             final n = await _importLogoFiles(paths);
             if (n > 0) setInner(() {});
           }
+          Future<void> importPasted() async {
+            final bytes = await Pasteboard.image;
+            final n = bytes == null ? 0 : await _importLogoBytes(bytes);
+            if (n > 0) {
+              setInner(() {});
+            } else {
+              await Native.toast('No image on the clipboard', symbol: 'exclamationmark.triangle.fill');
+            }
+          }
           return AlertDialog(
             title: const Text('Insert Logo'),
-            content: SizedBox(
-              width: 520,
-              height: 420,
-              child: DropTarget(
-                onDragDone: (d) => importAndRefresh(d.files.map((f) => f.path)),
-                child: entries.isEmpty
-                    ? Center(
-                        child: Text('Drag logo images here, or use “Add…”.',
-                            textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)))
-                    : GridView.builder(
+            content: CallbackShortcuts(
+              bindings: {
+                const SingleActivator(LogicalKeyboardKey.keyV, meta: true): importPasted,
+                if (!Platform.isMacOS) const SingleActivator(LogicalKeyboardKey.keyV, control: true): importPasted,
+              },
+              child: Focus(
+                autofocus: true,
+                child: SizedBox(
+                  width: 520,
+                  height: 420,
+                  child: DropTarget(
+                    onDragDone: (d) => importAndRefresh(d.files.map((f) => f.path)),
+                    child: entries.isEmpty
+                        ? Center(
+                            child: Text('Drag or paste (⌘V) logo images here, or use “Add…”.',
+                                textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)))
+                        : GridView.builder(
                         gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                             maxCrossAxisExtent: 120, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1),
                         itemCount: entries.length,
@@ -1321,9 +1358,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                           );
                         },
                       ),
+                    ),
+                  ),
+                ),
               ),
-            ),
             actions: [
+              TextButton.icon(
+                icon: const Icon(Icons.content_paste, size: 16),
+                label: const Text('Paste'),
+                onPressed: importPasted,
+              ),
               TextButton.icon(
                 icon: const Icon(Icons.add, size: 18),
                 label: const Text('Add…'),

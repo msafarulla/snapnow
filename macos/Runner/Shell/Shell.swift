@@ -319,6 +319,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private func handleCapture(_ url: URL) {
         let config = CaptureConfig.current
         Renderer.applyEffect(config.effect, to: url)
+        if UserDefaults.standard.bool(forKey: Prefs.wmEnabled) { Watermark.apply(to: url) } // user's text/image watermark
+        if Prefs.onByDefault(Prefs.stampTime) { CaptureStamp.apply(to: url) } // date & time, bottom-right (on top)
         SnapLiteNative.shared?.invoke("capturesChanged")
         switch config.share {
         case .none: break
