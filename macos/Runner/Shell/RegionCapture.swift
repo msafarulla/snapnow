@@ -582,10 +582,11 @@ enum CaptureStamp {
         let text = df.string(from: Date()) as NSString
         // Light and subtle (no pill, no shadow); the colour adapts to the pixels under it so it stays legible
         // on a white capture as well as a dark one.
-        let fontSize = max(10 * scale, CGFloat(h) * 0.011)
-        let font = NSFont.systemFont(ofSize: fontSize, weight: .light)
+        let fontSize = max(11 * scale, CGFloat(h) * 0.013)
+        // Monospaced digits read cleanly as a timestamp and keep an even width.
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
         let ts = text.size(withAttributes: [.font: font])
-        let margin = fontSize * 0.35   // hug the bottom-right corner (origin is bottom-left)
+        let margin = min(CGFloat(w), CGFloat(h)) * 0.02   // nestle into the (rounded) bottom-right corner
         let region = CGRect(x: CGFloat(w) - ts.width - margin, y: CGFloat(h) - ts.height - margin, width: ts.width, height: ts.height)
         let onLight = averageLuminance(of: image, in: region) > 0.6
         let attrs: [NSAttributedString.Key: Any] = [
@@ -694,5 +695,31 @@ enum Watermark {
         }
         NSGraphicsContext.restoreGraphicsState()
         return ctx.makeImage()
+    }
+}
+
+/// Rounds the capture's corners (transparent outside a rounded rectangle), as the final step so overlays are
+/// clipped with the image. Gated by Prefs.roundCorners; written atomically.
+enum RoundCorners {
+    static func apply(to url: URL) {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let base = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        let dpi = (props?[kCGImagePropertyDPIWidth] as? CGFloat) ?? 72
+        let w = base.width, h = base.height
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
+        let radius = min(CGFloat(w), CGFloat(h)) * 0.025
+        ctx.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: w, height: h), cornerWidth: radius, cornerHeight: radius, transform: nil))
+        ctx.clip()
+        ctx.draw(base, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let out = ctx.makeImage() else { return }
+        let tmp = url.deletingLastPathComponent().appendingPathComponent(".rc-\(UUID().uuidString).png")
+        guard let dest = CGImageDestinationCreateWithURL(tmp as CFURL, "public.png" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, out, [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { try? FileManager.default.removeItem(at: tmp); return }
+        _ = try? FileManager.default.replaceItemAt(url, withItemAt: tmp)
     }
 }
