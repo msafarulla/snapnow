@@ -95,6 +95,12 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   // Active gesture
   Offset? _createStart;
   Offset? _createCurrent;
+  // Interactive crop: a pending region (image coords) you adjust with dotted handles, then Enter/double-click
+  // applies it (Esc cancels). Null when the Crop tool isn't mid-crop.
+  Rect? _cropRect;
+  int? _cropHandle; // which rect handle is dragging (0–7), -1 to move the whole rect, null when not dragging
+  Offset? _cropGrab; // last pointer position while moving the rect
+  int? _cropHover; // handle under the cursor (0–7), -1 inside the rect, null otherwise — drives the resize cursor
   List<Offset>? _penPoints;
   List<Offset>? _trail; // the path dragged so far, when the Arrow / Line tool follows the drag
 
@@ -451,7 +457,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   void _syncMarch(CanvasState state) {
-    final needed = state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches);
+    final needed = _cropRect != null || state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches);
     if (needed && _marchTimer == null) {
       _marchTimer = Timer.periodic(const Duration(milliseconds: 40), (_) => _march.value = (_march.value + 0.05) % 1);
     } else if (!needed && _marchTimer != null) {
@@ -601,6 +607,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         ? _canvasHandles.indexWhere((h) => (h - p).distance <= 8 / _viewScale) : -1;
     _clearCopied();
 
+    if (_tool == Tool.crop) { _downCrop(p, doubleClick: doubleClick); return; }
+
     if (canvasHandle >= 0) {
       final edge = CanvasPainter.rectHandles(_imageRect)[canvasHandle];
       setState(() => _canvasDrag = (canvasHandle, _imageRect, edge - p));
@@ -674,6 +682,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   void _move(Offset p) {
+    if (_tool == Tool.crop && _cropHandle != null && _cropRect != null) {
+      if (_cropHandle == -1) {
+        final d = p - (_cropGrab ?? p);
+        _cropGrab = p;
+        setState(() => _cropRect = _cropRect!.shift(d));
+      } else {
+        setState(() => _cropRect = _resizedRect(_cropRect!, _cropHandle!, p));
+      }
+      return;
+    }
     if (_canvasDrag case (final h, _, final grab)) {
       final r = _resizedRect(_imageRect, h, p + grab);
       final n = Rect.fromLTRB(math.min(r.left, r.right), math.min(r.top, r.bottom),
@@ -720,6 +738,14 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   void _up(Offset p) {
+    if (_tool == Tool.crop) {
+      if (_cropHandle != null) { setState(() { _cropHandle = null; _cropGrab = null; }); return; }
+      if (_createStart != null && _createCurrent != null) {
+        final r = Rect.fromPoints(_createStart!, _createCurrent!);
+        setState(() { _cropRect = (r.width > 8 && r.height > 8) ? r : null; _createStart = null; _createCurrent = null; });
+        return;
+      }
+    }
     if (_canvasDrag case (_, final rect, _)) {
       setState(() => _canvasDrag = null);
       if (rect != _imageRect) _resizeCanvasTo(rect);
@@ -749,6 +775,56 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       _trail = null;
     }
   }
+
+  /// Crop-tool pointer-down: grab a dotted handle to resize, the body to move, a double-click inside to apply,
+  /// or start a fresh crop rectangle.
+  void _downCrop(Offset p, {required bool doubleClick}) {
+    final tol = 10 / _viewScale;
+    if (_cropRect != null) {
+      if (doubleClick && _cropRect!.contains(p)) { _applyCrop(); return; }
+      final handles = CanvasPainter.rectHandles(_cropRect!);
+      for (var i = 0; i < handles.length; i++) {
+        if ((handles[i] - p).distance <= tol) { setState(() => _cropHandle = i); _cropGrab = p; return; }
+      }
+      if (_cropRect!.contains(p)) { setState(() => _cropHandle = -1); _cropGrab = p; return; }
+    }
+    setState(() { _cropRect = null; _cropHandle = null; _createStart = _clamp(p); _createCurrent = _createStart; });
+  }
+
+  /// Applies the pending crop (clipped to the image, rounded corners) and returns to the Select tool.
+  void _applyCrop() {
+    final r = _cropRect?.intersect(_imageRect);
+    setState(() { _cropRect = null; _cropHandle = null; _cropHover = null; });
+    if (r == null || r.width < 1 || r.height < 1) return;
+    _crop(r, rounded: true);
+  }
+
+  void _cancelCrop() =>
+      setState(() { _cropRect = null; _cropHandle = null; _cropHover = null; _createStart = null; _createCurrent = null; });
+
+  /// Tracks which crop handle (or the body) the cursor is over, so the cursor can show it's draggable.
+  void _hoverCrop(Offset p) {
+    int? h;
+    if (_cropRect != null) {
+      final tol = 10 / _viewScale;
+      final handles = CanvasPainter.rectHandles(_cropRect!);
+      for (var i = 0; i < handles.length; i++) {
+        if ((handles[i] - p).distance <= tol) { h = i; break; }
+      }
+      h ??= _cropRect!.contains(p) ? -1 : null;
+    }
+    if (h != _cropHover) setState(() => _cropHover = h);
+  }
+
+  /// The resize cursor for the crop handle under the pointer (two-sided arrow), or move inside the rect.
+  MouseCursor get _cropCursor => switch (_cropHover) {
+        0 || 3 => SystemMouseCursors.resizeUpLeftDownRight, // top-left / bottom-right corners
+        1 || 2 => SystemMouseCursors.resizeUpRightDownLeft, // top-right / bottom-left corners
+        4 || 5 => SystemMouseCursors.resizeUpDown, // top / bottom edges
+        6 || 7 => SystemMouseCursors.resizeLeftRight, // left / right edges
+        -1 => SystemMouseCursors.move,
+        _ => SystemMouseCursors.precise,
+      };
 
   /// Dragging an annotation's body. A callout's bubble moves on its own, leaving the pointer tip anchored on
   /// what it points at; Option-drag (Alt on Windows/Linux) moves the whole callout.
@@ -1540,19 +1616,23 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   // ---- Canvas operations (flatten / flip / trim / crop / resize / color) ----
 
-  Future<ui.Image> _cropImage(ui.Image src, Rect rect) async {
+  Future<ui.Image> _cropImage(ui.Image src, Rect rect, {bool rounded = false}) async {
     final rec = ui.PictureRecorder();
     final c = Canvas(rec);
-    c.drawImageRect(src, rect, Rect.fromLTWH(0, 0, rect.width, rect.height), Paint());
+    final dst = Rect.fromLTWH(0, 0, rect.width, rect.height);
+    if (rounded) {
+      c.clipRRect(RRect.fromRectAndRadius(dst, Radius.circular(math.min(rect.width, rect.height) * 0.025)));
+    }
+    c.drawImageRect(src, rect, dst, Paint());
     return rec.endRecording().toImage(rect.width.round(), rect.height.round());
   }
 
-  Future<void> _crop(Rect rect) async {
+  Future<void> _crop(Rect rect, {bool rounded = false}) async {
     if (_state == null) return;
-    final cropped = await _cropImage(_state!.image, rect);
+    final cropped = await _cropImage(_state!.image, rect, rounded: rounded);
     final shift = Offset(-rect.left, -rect.top);
     _commit(_state!.copyWith(image: cropped, annotations: [for (final a in _state!.annotations) a.movedBy(shift)]));
-    setState(() { _selection = null; _tool = Tool.select; });
+    setState(() { _selection = null; _tool = Tool.select; _cropHover = null; });
   }
 
   Future<void> _flattenInPlace() async {
@@ -1785,6 +1865,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       if (t == Tool.box && _shapeKind.oval) _shapeKind = ShapeKind.rectangle;
       if (t == Tool.ellipse && !_shapeKind.oval) _shapeKind = ShapeKind.ellipse;
       _tool = t; _selection = null; _group.clear();
+      // Entering Crop starts with a frame around the whole image (edges ready to drag); other tools clear it.
+      _cropRect = t == Tool.crop && _state != null ? _imageRect : null;
+      _cropHandle = null; _cropHover = null;
     });
   }
 
@@ -2051,6 +2134,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         const SingleActivator(LogicalKeyboardKey.keyA, meta: true): _selectAllSimilar,
         const SingleActivator(LogicalKeyboardKey.delete): _deleteSelection,
         const SingleActivator(LogicalKeyboardKey.backspace): _deleteSelection,
+        if (_cropRect != null) ...{
+          const SingleActivator(LogicalKeyboardKey.enter): _applyCrop,
+          const SingleActivator(LogicalKeyboardKey.numpadEnter): _applyCrop,
+          const SingleActivator(LogicalKeyboardKey.escape): _cancelCrop,
+        },
         for (final e in _toolKeys.entries) SingleActivator(e.key): () => _setTool(e.value),
       },
       child: Focus(focusNode: _focus, autofocus: true, child: _scaffold(state)),
@@ -2130,12 +2218,15 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             ),
             Positioned.fill(
               child: MouseRegion(
-                cursor: _tool == Tool.select ? SystemMouseCursors.basic : SystemMouseCursors.precise,
+                cursor: _tool == Tool.crop
+                    ? _cropCursor
+                    : _tool == Tool.select ? SystemMouseCursors.basic : SystemMouseCursors.precise,
                 child: GestureDetector(
                   onSecondaryTapUp: (d) => _showCanvasMenu(d.globalPosition),
                   child: Listener(
                     key: const ValueKey('snaplite-canvas'), // for widget tests
                     behavior: HitTestBehavior.opaque,
+                    onPointerHover: (e) { if (_tool == Tool.crop) _hoverCrop(toImage(e.localPosition)); },
                     onPointerDown: (e) {
                       _focus.requestFocus();
                       if (_startsPan(e)) {
@@ -2181,6 +2272,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                         guides: _guides,
                         boundsOfSelection: _textEdit != null || selected == null || selected!.rect != null ? null : _bounds(selected!),
                         groupBoxes: _selection != null && _group.isNotEmpty ? _groupBoxes() : null,
+                        cropRect: _cropRect,
                       ),
                     ),
                   ),
@@ -2890,11 +2982,12 @@ class _PreviewPainter extends CustomPainter {
   final List<Guide> guides;
   final bool fourier; // Fourier drawing: spinning circles trace the stroke as it's drawn
   final List<Offset>? trail; // the drag so far, every point (Fourier drawing traces it)
+  final Rect? cropRect; // the pending Crop-tool region (image coords): dotted outline + draggable handles
 
   _PreviewPainter({required this.base, required this.origin, required this.tool, required this.color, required this.size,
       required this.scale, this.scaleY, required this.style, this.createStart, this.createCurrent, this.penPoints, this.follow,
       this.canvasChrome = false, this.ants, required this.march, this.canvasResize, this.boundsOfSelection, this.groupBoxes,
-      this.guides = const [], this.fourier = false, this.trail})
+      this.guides = const [], this.fourier = false, this.trail, this.cropRect})
       : super(repaint: Listenable.merge([ants, march]));
 
   static const _accent = Color(0xFF2F7CF6);
@@ -2994,6 +3087,19 @@ class _PreviewPainter extends CustomPainter {
         final sq = Rect.fromCenter(center: h, width: 7, height: 7);
         canvas.drawRect(sq, Paint()..color = Colors.white);
         canvas.drawRect(sq, Paint()..color = const Color(0xFF737373)..style = PaintingStyle.stroke..strokeWidth = 1);
+      }
+    }
+
+    // The pending crop region: dim outside, a dotted outline, and draggable corner/edge handles.
+    if (cropRect != null) {
+      final r = Rect.fromLTRB(cropRect!.left * scale, cropRect!.top * scale, cropRect!.right * scale, cropRect!.bottom * scale);
+      canvas.drawPath(Path()..addRect(frame)..addRect(r)..fillType = PathFillType.evenOdd,
+          Paint()..color = Colors.black.withValues(alpha: 0.45));
+      _border(canvas, r, march.value); // marching-ants dotted outline
+      for (final h in CanvasPainter.rectHandles(cropRect!)) {
+        final c = Offset(h.dx * scale, h.dy * scale);
+        canvas.drawCircle(c, 5, Paint()..color = Colors.white);
+        canvas.drawCircle(c, 5, Paint()..color = _accent..style = PaintingStyle.stroke..strokeWidth = 1.5);
       }
     }
     canvas.restore();

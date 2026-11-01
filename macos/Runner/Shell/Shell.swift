@@ -59,6 +59,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(registerHotKeys), name: Shortcuts.changed, object: nil)
 
         ScreenPermission.checkAtLaunch()
+        // A quiet look for a newer release once the app has settled; manual checks are in the menu.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { UpdateCheck.run(manual: false) }
         ScheduledCapture.shared.onChange = { [weak self] in
             guard let self, !self.busy, !self.recorder.isRecording else { return }
             self.showIdleIcon()
@@ -109,8 +111,70 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
+        menu.addItem(.separator())
+        menu.addItem(item("About SnapNow", #selector(showAbout)))
+        menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
         menu.addItem(NSMenuItem(title: "Quit SnapNow", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         return menu
+    }
+
+    @objc private func checkForUpdates() { UpdateCheck.run(manual: true) }
+
+    /// Compares the running version with the latest GitHub release of the (public) repo — no token needed —
+    /// and says so: a notice when a newer one exists; on a manual check, also "you're current" or the error.
+    enum UpdateCheck {
+        static let latestURL = URL(string: "https://api.github.com/repos/msafarulla/snapnow/releases/latest")!
+        static let page = URL(string: "https://github.com/msafarulla/snapnow/releases/latest")!
+
+        static func run(manual: Bool) {
+            var request = URLRequest(url: latestURL)
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.timeoutInterval = 10
+            URLSession.shared.dataTask(with: request) { data, _, _ in
+                let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+                guard let data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let tag = json["tag_name"] as? String else {
+                    if manual { DispatchQueue.main.async { Toast.show("Couldn't check for updates", symbol: "exclamationmark.triangle.fill") } }
+                    return
+                }
+                let latest = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+                DispatchQueue.main.async {
+                    if isNewer(latest, than: current) {
+                        Toast.show("SnapNow \(latest) is available", symbol: "arrow.down.circle.fill",
+                                   detail: "You have \(current). Check for Updates… in the menu opens the release.")
+                        if manual { NSWorkspace.shared.open(page) }
+                    } else if manual {
+                        Toast.show("SnapNow \(current) is the latest version")
+                    }
+                }
+            }.resume()
+        }
+
+        /// Dotted versions compared number by number: 1.58.20 is newer than 1.58.3.
+        static func isNewer(_ a: String, than b: String) -> Bool {
+            let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
+            for i in 0..<max(x.count, y.count) {
+                let p = i < x.count ? x[i] : 0, q = i < y.count ? y[i] : 0
+                if p != q { return p > q }
+            }
+            return false
+        }
+    }
+
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        let info = Bundle.main.infoDictionary
+        let version = "\(info?["CFBundleShortVersionString"] ?? "")"
+        let build = "\(info?["CFBundleVersion"] ?? "")"
+        let credits = NSAttributedString(
+            string: "Screenshot, markup, recording and GIF capture.",
+            attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "SnapNow",
+            .applicationVersion: "Version \(version) (\(build))",
+            .credits: credits,
+        ])
     }
 
     private func item(_ title: String, _ action: Selector, shortcut: ShortcutAction? = nil) -> NSMenuItem {
