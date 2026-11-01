@@ -96,7 +96,7 @@ class AppController with TrayListener, WindowListener {
   Future<void> openEditor(String path) async {
     await _show();
     _closePushedPages();
-    await libraryKey.currentState?.openForEditing(path);
+    await libraryKey.currentState?.openForEditing(path, fresh: true); // a capture that just happened
   }
 
   Future<void> showLibrary() async {

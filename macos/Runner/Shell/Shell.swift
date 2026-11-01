@@ -168,7 +168,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         let version = "\(info?["CFBundleShortVersionString"] ?? "")"
         let build = "\(info?["CFBundleVersion"] ?? "")"
         let credits = NSAttributedString(
-            string: "Screenshot, markup, recording and GIF capture.",
+            string: "Control Alt Shift Technologies\nScreenshot, markup, recording and GIF capture.",
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "SnapNow",

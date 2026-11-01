@@ -103,12 +103,12 @@ class LibraryPageState extends State<LibraryPage> {
   // ---- Modes ----
 
   /// Enters (or switches within) edit mode, saving any unsaved edits first.
-  Future<void> openForEditing(String path) async {
+  Future<void> openForEditing(String path, {bool fresh = false}) async {
     if (_editing && _editingPath == path) return _editor?.focus();
     if (!await confirmDiscard()) return;
     setState(() { _editing = true; _editingPath = path; });
     await WidgetsBinding.instance.endOfFrame;
-    await _editor?.openFile(path);
+    await _editor?.openFile(path, fresh: fresh);
     _editor?.focus(); // keys (⌘Z, ⌘C, Delete, tool letters) now go to the editor
     _scrollFilmstripTo(path);
   }

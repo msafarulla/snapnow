@@ -1116,8 +1116,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     if (!identical(grown, _state)) _commit(grown);
   }
 
-  /// Loads an image file (a capture, or one picked by the user) as a fresh canvas.
-  Future<void> openFile(String path) async {
+  /// Loads an image file (a capture, or one picked by the user) as a fresh canvas. `fresh` marks a capture
+  /// that just happened: it opens in Crop mode (frame + handles ready) unless that setting is off.
+  Future<void> openFile(String path, {bool fresh = false}) async {
     final bytes = await File(path).readAsBytes(); // read fully first: the file may be rewritten later
     if (bytes.isEmpty) return;
     // Saved by SnapNow with its markup: the original capture and every annotation come back, still editable
@@ -1145,6 +1146,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     _clearCopied();
     _refreshImageBytes();
     await windowManager.setTitle('SnapNow — ${path.split('/').last}');
+    if (fresh && mounted && ((await Native.getBool('capture.openInCrop')) ?? true) && mounted) _setTool(Tool.crop);
   }
 
   Future<void> openImageDialog() async {

@@ -18,6 +18,8 @@ enum Prefs {
     static let stampTime = "capture.stampTime"
     /// Rounds the capture's corners. Default on.
     static let roundCorners = "capture.roundCorners"
+    /// A new capture opens in the editor already in Crop mode (frame + handles ready). Default on.
+    static let openInCrop = "capture.openInCrop"
     /// Watermark stamped on captures (text and/or image), all configurable; off by default.
     static let wmEnabled = "watermark.enabled"
     static let wmText = "watermark.text"
@@ -142,6 +144,8 @@ final class SettingsWindowController: NSWindowController {
                                           action: #selector(prefToggled(_:)), key: Prefs.stampTime))
         stack.addArrangedSubview(checkbox("Round the capture corners", on: Prefs.onByDefault(Prefs.roundCorners),
                                           action: #selector(prefToggled(_:)), key: Prefs.roundCorners))
+        stack.addArrangedSubview(checkbox("Open new captures in Crop mode", on: Prefs.onByDefault(Prefs.openInCrop),
+                                          action: #selector(prefToggled(_:)), key: Prefs.openInCrop))
         stack.addArrangedSubview(checkbox("Open SnapNow at login", on: SMAppService.mainApp.status == .enabled,
                                           action: #selector(loginToggled(_:))))
         let format = NSPopUpButton(frame: .zero, pullsDown: false)
