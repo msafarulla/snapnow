@@ -11,6 +11,13 @@ enum Prefs {
     /// Animated GIF frames a second ("15", "25" or "50"); the editor reads it each time it makes a GIF.
     static let gifFps = "gifFps"
     static let gifFpsChoices = ["50", "25", "15"]
+    /// Area capture re-offers the last region (outlined; Enter or a click inside re-captures it). Default on.
+    static let rememberArea = "regionCapture.rememberArea"
+
+    /// A bool pref that defaults to true when it has never been set (plain `bool(forKey:)` would read false).
+    static func onByDefault(_ key: String) -> Bool {
+        UserDefaults.standard.object(forKey: key) == nil ? true : UserDefaults.standard.bool(forKey: key)
+    }
 }
 
 /// Which tools get a toolbar button; the rest are under More.
@@ -116,6 +123,8 @@ final class SettingsWindowController: NSWindowController {
                                           action: #selector(prefToggled(_:)), key: Prefs.copyImage))
         stack.addArrangedSubview(checkbox("Record the microphone with screen recordings", on: defaults.bool(forKey: Prefs.microphone),
                                           action: #selector(prefToggled(_:)), key: Prefs.microphone))
+        stack.addArrangedSubview(checkbox("Remember the last capture area (Enter re-captures it)", on: Prefs.onByDefault(Prefs.rememberArea),
+                                          action: #selector(prefToggled(_:)), key: Prefs.rememberArea))
         stack.addArrangedSubview(checkbox("Open SnapNow at login", on: SMAppService.mainApp.status == .enabled,
                                           action: #selector(loginToggled(_:))))
         let format = NSPopUpButton(frame: .zero, pullsDown: false)

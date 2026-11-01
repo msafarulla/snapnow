@@ -210,8 +210,9 @@ final class RegionCapture {
     }
 
     /// What a click would capture right now (or the selection while dragging).
-    /// The last area, offered again: shown outlined, and Enter or a click inside it captures it.
-    lazy var offered: CGRect? = Self.lastArea
+    /// The last area, offered again: shown outlined, and Enter or a click inside it captures it — unless the
+    /// "Remember the last capture area" setting is off.
+    lazy var offered: CGRect? = Prefs.onByDefault(Prefs.rememberArea) ? Self.lastArea : nil
 
     /// The cursor is over the offered last area (so a click takes it, not the window under it).
     var overOffered: Bool { offered.map { $0.contains(mouse) } ?? false }
@@ -295,9 +296,9 @@ final class RegionCapture {
         return url
     }
 
-    /// Enter: the same area as last time, cut to the screen it's on.
+    /// Enter: the same area as last time, cut to the screen it's on (only while the setting offers it).
     func captureLastArea() {
-        guard let last = Self.lastArea,
+        guard let last = offered,
               let f = frozen.first(where: { $0.screen.frame.contains(CGPoint(x: last.midX, y: last.midY)) }) else { NSSound.beep(); return }
         let r = last.intersection(f.screen.frame)
         take(r, from: f)

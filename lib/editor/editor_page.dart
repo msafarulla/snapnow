@@ -7,6 +7,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:file_saver/file_saver.dart';
 import 'package:pasteboard/pasteboard.dart';
@@ -1213,60 +1215,138 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     setState(() { _selection = ann.id; _group.clear(); _tool = Tool.select; });
   }
 
-  /// A grid of the logos bundled under `assets/logos/`; the chosen one drops onto the canvas as a movable,
-  /// resizable overlay (the same as Add Image). Drop more PNGs into that folder and rebuild to grow the set.
+  static const _logoExts = ['.png', '.jpg', '.jpeg', '.webp'];
+  Directory? _logosDirCache;
+
+  /// Where user-added logos live (persist without a rebuild, unlike the bundled `assets/logos/`).
+  Future<Directory> _userLogosDir() async {
+    final d = _logosDirCache ??= Directory('${(await getApplicationSupportDirectory()).path}/logos');
+    if (!d.existsSync()) d.createSync(recursive: true);
+    return d;
+  }
+
+  /// Copies dropped/picked image files into the user logos dir, with collision-safe names; the one import
+  /// path for both drag-and-drop and the Add button. Returns how many were added.
+  Future<int> _importLogoFiles(Iterable<String> paths) async {
+    final dir = await _userLogosDir();
+    var added = 0;
+    for (final p in paths) {
+      if (!_logoExts.any((e) => p.toLowerCase().endsWith(e))) continue;
+      final src = File(p);
+      if (!src.existsSync()) continue;
+      try {
+        if (await src.length() > 20 * 1024 * 1024) continue; // skip absurdly large files
+      } catch (_) {
+        continue;
+      }
+      final base = p.split('/').last, dot = base.lastIndexOf('.');
+      final name = base.substring(0, dot), ext = base.substring(dot);
+      var dest = '${dir.path}/$base';
+      for (var n = 1; File(dest).existsSync(); n++) {
+        dest = '${dir.path}/$name-$n$ext';
+      }
+      try {
+        await src.copy(dest);
+        added++;
+      } catch (_) {}
+    }
+    return added;
+  }
+
+  /// A grid of logos — those bundled under `assets/logos/` plus any the user has added — that you can grow by
+  /// dragging image files onto the dialog or via the Add button; the chosen one drops onto the canvas as a
+  /// movable, resizable overlay (the same as Add Image).
   Future<void> _showLogoPicker() async {
-    const exts = ['.png', '.jpg', '.jpeg', '.webp'];
+    final dir = await _userLogosDir();
     final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
-    final logos = manifest.listAssets()
-        .where((a) => a.startsWith('assets/logos/') && exts.any((e) => a.toLowerCase().endsWith(e)))
+    final bundled = manifest.listAssets()
+        .where((a) => a.startsWith('assets/logos/') && _logoExts.any((e) => a.toLowerCase().endsWith(e)))
         .toList()
       ..sort();
     if (!mounted) return;
-    final picked = await showDialog<String>(
+    // Result: (isAsset, path) — asset path for bundled, file path for user logos.
+    final picked = await showDialog<(bool, String)>(
       context: context,
-      builder: (ctx) {
-        final scheme = Theme.of(ctx).colorScheme;
-        return AlertDialog(
-          title: const Text('Insert Logo'),
-          content: SizedBox(
-            width: 480,
-            height: 380,
-            child: logos.isEmpty
-                ? Center(
-                    child: Text('No logos bundled yet.\nDrop logo PNGs into assets/logos/ and rebuild.',
-                        textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)))
-                : GridView.builder(
-                    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: 120, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1),
-                    itemCount: logos.length,
-                    itemBuilder: (_, i) {
-                      final a = logos[i];
-                      final name = a.split('/').last.replaceFirst(RegExp(r'\.[^.]+$'), '');
-                      return Tooltip(
-                        message: name,
-                        waitDuration: const Duration(milliseconds: 400),
-                        child: InkWell(
-                          onTap: () => Navigator.pop(ctx, a),
-                          borderRadius: BorderRadius.circular(8),
-                          child: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                                color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(8)),
-                            child: Image.asset(a, fit: BoxFit.contain),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel'))],
-        );
-      },
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setInner) {
+          final scheme = Theme.of(ctx).colorScheme;
+          final files = dir
+              .listSync()
+              .whereType<File>()
+              .map((f) => f.path)
+              .where((p) => _logoExts.any((e) => p.toLowerCase().endsWith(e)))
+              .toList()
+            ..sort();
+          final entries = <(bool, String)>[
+            for (final a in bundled) (true, a),
+            for (final p in files) (false, p),
+          ];
+          Future<void> importAndRefresh(Iterable<String> paths) async {
+            final n = await _importLogoFiles(paths);
+            if (n > 0) setInner(() {});
+          }
+          return AlertDialog(
+            title: const Text('Insert Logo'),
+            content: SizedBox(
+              width: 520,
+              height: 420,
+              child: DropTarget(
+                onDragDone: (d) => importAndRefresh(d.files.map((f) => f.path)),
+                child: entries.isEmpty
+                    ? Center(
+                        child: Text('Drag logo images here, or use “Add…”.',
+                            textAlign: TextAlign.center, style: TextStyle(color: scheme.onSurfaceVariant)))
+                    : GridView.builder(
+                        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: 120, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1),
+                        itemCount: entries.length,
+                        itemBuilder: (_, i) {
+                          final (isAsset, path) = entries[i];
+                          final name = path.split('/').last.replaceFirst(RegExp(r'\.[^.]+$'), '');
+                          return Tooltip(
+                            message: name,
+                            waitDuration: const Duration(milliseconds: 400),
+                            child: InkWell(
+                              onTap: () => Navigator.pop(ctx, (isAsset, path)),
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                    color: scheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(8)),
+                                child: isAsset
+                                    ? Image.asset(path, fit: BoxFit.contain)
+                                    : Image.file(File(path), fit: BoxFit.contain),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ),
+            actions: [
+              TextButton.icon(
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Add…'),
+                onPressed: () async {
+                  final r = await FilePicker.pickFiles(type: FileType.image, allowMultiple: true);
+                  if (r != null) await importAndRefresh(r.files.map((f) => f.path).whereType<String>());
+                },
+              ),
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+            ],
+          );
+        },
+      ),
     );
     if (picked == null) return;
-    final data = await rootBundle.load(picked);
-    await addOverlayBytes(data.buffer.asUint8List());
+    final (isAsset, path) = picked;
+    try {
+      final bytes = isAsset ? (await rootBundle.load(path)).buffer.asUint8List() : await File(path).readAsBytes();
+      await addOverlayBytes(bytes);
+    } catch (e, st) {
+      debugPrint('Insert logo: $e\n$st');
+      await Native.toast("Couldn't insert that logo", symbol: 'exclamationmark.triangle.fill');
+    }
   }
 
   /// Grows the base canvas to fit every image overlay, shifting content if it spills past top/left.
