@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>SnapNow — Excalidraw</title>
+  <script>
+    // Shims the Excalidraw/React UMD builds expect in a plain browser (no bundler).
+    window.global = window;
+    window.process = window.process || { env: { NODE_ENV: "production" } };
+    window.EXCALIDRAW_ASSET_PATH = "./";
+    window.onerror = function (m, src, l, c, e) {
+      var r = document.getElementById("root");
+      if (r) r.innerHTML = '<pre style="padding:16px;color:#b00;white-space:pre-wrap;font:13px monospace">' +
+        'Excalidraw failed to load:\n' + (e && e.stack ? e.stack : m) + '</pre>';
+      if (window.flutter_inappwebview) window.flutter_inappwebview.callHandler("error", String(m));
+    };
+  </script>
+  <style>html,body,#root{margin:0;height:100%;width:100%;overflow:hidden;background:#fff}</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="react.production.min.js"></script>
+  <script src="react-dom.production.min.js"></script>
+  <script src="excalidraw.production.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -20,6 +20,7 @@ import '../model/annotation.dart';
 import '../model/markup_file.dart';
 import '../platform/native.dart';
 import 'canvas_painter.dart';
+import '../excalidraw/excalidraw_page.dart';
 import '../export/manim_scene.dart';
 import '../manim/from_capture.dart';
 import '../manim/manim_studio_page.dart';
@@ -1471,6 +1472,32 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     }
   }
 
+  /// Opens the embedded Excalidraw whiteboard blank; its "Send to SnapNow" drops the result on the canvas.
+  void _openWhiteboard() {
+    _endTextEdit();
+    Navigator.of(context).push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => ExcalidrawPage(onExport: addOverlayBytes),
+    ));
+  }
+
+  /// Opens the current picture in the whiteboard to mark it up there; the result comes back as an overlay.
+  Future<void> _openInWhiteboard() async {
+    _endTextEdit();
+    final s = _state;
+    if (s == null) return;
+    final png = await _flatPng();
+    if (png == null || !mounted) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => ExcalidrawPage(
+        capture: png,
+        captureSize: Size(s.image.width.toDouble(), s.image.height.toDouble()),
+        onExport: addOverlayBytes,
+      ),
+    ));
+  }
+
   /// Grows the base canvas to fit every image overlay, shifting content if it spills past top/left.
   Future<CanvasState> _grownToFit(CanvasState s) async {
     var union = Rect.fromLTWH(0, 0, s.image.width.toDouble(), s.image.height.toDouble());
@@ -2702,6 +2729,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       for (final t in _toolOrder) if (!_visibleTools.contains(t)) (t.name, _toolInfo[t]!.$1, _toolInfo[t]!.$2),
       ('overlay', Icons.add_photo_alternate_outlined, 'Add Image…'),
       ('logo', Icons.business_outlined, 'Insert Logo…'),
+      ('whiteboard', Icons.gesture, 'Excalidraw'),
+      ('excalidraw', Icons.draw_outlined, 'Open in Excalidraw…'),
       if (!Platform.isMacOS) ...[
         ('open', Icons.folder_open_outlined, 'Open Image…'),
         ('flatten', Icons.layers_clear_outlined, 'Flatten All'),
@@ -2717,6 +2746,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         case 'open': openImageDialog();
         case 'overlay': _addOverlay();
         case 'logo': _showLogoPicker();
+        case 'whiteboard': _openWhiteboard();
+        case 'excalidraw': _openInWhiteboard();
         case 'flatten': _flattenInPlace();
         case 'export': saveAs();
         case 'gif': saveAnimatedGif();

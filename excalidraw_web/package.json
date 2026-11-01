@@ -1,0 +1,11 @@
+{
+  "name": "snapnow-excalidraw",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Vendors the offline Excalidraw dist embedded in SnapNow (MIT, github.com/excalidraw/excalidraw).",
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.17.6",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  }
+}

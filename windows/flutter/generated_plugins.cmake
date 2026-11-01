@@ -5,6 +5,7 @@
 list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
   file_saver
+  flutter_inappwebview_windows
   hotkey_manager_windows
   pasteboard
   screen_retriever_windows
