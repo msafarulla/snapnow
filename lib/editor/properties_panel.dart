@@ -26,6 +26,8 @@ abstract class PanelHost {
   void playFourier();
   ShapeKind? get shapeKind; // a box or ellipse (selected, or the Shape tool's choice); null otherwise
   void pickShapeKind(ShapeKind k);
+  StepMarker? get stepMarker; // a step's marker (selected, or the Step tool's choice); null otherwise
+  void pickStepMarker(StepMarker s);
   void pickColor(Color c);
   void openColorPanel();
   void pickSize(StrokeSize s);
@@ -167,6 +169,20 @@ class PropertiesPanel extends StatelessWidget {
               glyph: (k) => CustomPaint(size: const Size(16, 14), painter: _ShapeGlyph(k, Theme.of(context).colorScheme.onSurface)),
               tooltip: (k) => k.label,
               onTap: host.pickShapeKind,
+            ),
+          ]),
+        ],
+        if (host.stepMarker case final step?) ...[
+          const SizedBox(height: 4),
+          _row(context, 'Marker', [
+            _Segmented<StepMarker>(
+              values: StepMarker.values,
+              selected: step,
+              itemWidth: 32,
+              label: (s) => s.label,
+              glyph: (s) => CustomPaint(size: const Size(18, 18), painter: _StepGlyph(s, Theme.of(context).colorScheme.onSurface)),
+              tooltip: (s) => s.label,
+              onTap: host.pickStepMarker,
             ),
           ]),
         ],
@@ -484,8 +500,9 @@ class _Segmented<T> extends StatelessWidget {
   final String Function(T) tooltip;
   final Widget Function(T)? glyph; // shown instead of the label
   final ValueChanged<T> onTap;
+  final double itemWidth;
   const _Segmented({required this.values, required this.selected, required this.label, required this.tooltip, required this.onTap,
-      this.glyph});
+      this.glyph, this.itemWidth = 42});
 
   @override
   Widget build(BuildContext context) {
@@ -501,7 +518,7 @@ class _Segmented<T> extends StatelessWidget {
               onTap: () => onTap(v),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 120),
-                width: 42, height: 24,
+                width: itemWidth, height: 24,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: v == selected ? chrome.raised : Colors.transparent,
@@ -841,6 +858,23 @@ class _ShapeGlyph extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ShapeGlyph old) => old.kind != kind || old.color != color;
+}
+
+/// A small outline of a step marker for the Marker picker.
+class _StepGlyph extends CustomPainter {
+  final StepMarker style;
+  final Color color;
+  _StepGlyph(this.style, this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final d = style == StepMarker.pin ? size.height * 0.62 : size.height * 0.72;
+    final c = size.center(Offset.zero) - (style == StepMarker.pin ? Offset(0, size.height * 0.16) : Offset.zero);
+    canvas.drawPath(CanvasPainter.stepPath(c, d, style), Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 1.4..strokeJoin = StrokeJoin.round);
+  }
+
+  @override
+  bool shouldRepaint(covariant _StepGlyph old) => old.style != style || old.color != color;
 }
 
 class _TilePainter extends CustomPainter {

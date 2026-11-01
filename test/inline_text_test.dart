@@ -341,8 +341,8 @@ void main() {
   testWidgets('arrows bend through points on the curve: drag a +, double-click to add or remove', (tester) async {
     final editor = await pumpEditor(tester);
     final area = tester.getRect(find.byKey(const ValueKey('snaplite-canvas')));
-    final scale = [(area.width - 40) / 1200, (area.height - 40) / 800, 1.0].reduce((a, b) => a < b ? a : b);
-    final origin = area.center - Offset(1200 * scale, 800 * scale) / 2;
+    final scale = editor.viewScale; // the editor fits the picture into the space its floating chrome leaves free
+    final origin = area.topLeft + editor.viewOrigin;
     Offset screen(Offset img) => origin + img * scale;
 
     await tester.tap(find.text('Arrow'));
@@ -387,8 +387,8 @@ void main() {
   testWidgets('each point has a tangent line; dragging its handle steers the curve, double-click resets', (tester) async {
     final editor = await pumpEditor(tester);
     final area = tester.getRect(find.byKey(const ValueKey('snaplite-canvas')));
-    final scale = [(area.width - 40) / 1200, (area.height - 40) / 800, 1.0].reduce((a, b) => a < b ? a : b);
-    final origin = area.center - Offset(1200 * scale, 800 * scale) / 2;
+    final scale = editor.viewScale; // the editor fits the picture into the space its floating chrome leaves free
+    final origin = area.topLeft + editor.viewOrigin;
     Offset screen(Offset img) => origin + img * scale;
 
     await tester.tap(find.text('Arrow'));
@@ -613,8 +613,8 @@ void main() {
   testWidgets('after bending an arrow, the thickness slider is back (and on clicking it again)', (tester) async {
     final editor = await pumpEditor(tester);
     final area = tester.getRect(find.byKey(const ValueKey('snaplite-canvas')));
-    final scale = [(area.width - 40) / 1200, (area.height - 40) / 800, 1.0].reduce((a, b) => a < b ? a : b);
-    final origin = area.center - Offset(1200 * scale, 800 * scale) / 2;
+    final scale = editor.viewScale; // the editor fits the picture into the space its floating chrome leaves free
+    final origin = area.topLeft + editor.viewOrigin;
     Offset screen(Offset img) => origin + img * scale;
     final slider = find.byKey(const ValueKey('snaplite-thickness'));
 

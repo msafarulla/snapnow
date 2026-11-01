@@ -5,11 +5,14 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:snaplite_flutter/app/theme.dart';
+import 'package:snaplite_flutter/editor/canvas_painter.dart';
 import 'package:snaplite_flutter/editor/editor_page.dart';
+import 'package:snaplite_flutter/model/annotation.dart';
 
 /// Renders the editor in each theme to PNGs for eyeballing the look (set SNAPNOW_LOOK_DIR to a folder).
 /// Loads a real system font so text is readable instead of Ahem boxes. Skipped without the variable.
 void main() {
+  renderMarkers();
   final outDir = Platform.environment['SNAPNOW_LOOK_DIR'];
 
   testWidgets('render the editor look', (tester) async {
@@ -70,5 +73,25 @@ void main() {
         File('$outDir/editor-$name.png').writeAsBytesSync(bytes!.buffer.asUint8List());
       });
     }
+  });
+}
+
+/// All six step markers side by side, for eyeballing (same SNAPNOW_LOOK_DIR).
+void renderMarkers() {
+  final outDir = Platform.environment['SNAPNOW_LOOK_DIR'];
+  test('render the step markers', () async {
+    if (outDir == null) return;
+    final rec = ui.PictureRecorder();
+    final canvas = Canvas(rec);
+    canvas.drawRect(const Rect.fromLTWH(0, 0, 480, 140), Paint()..color = Colors.white);
+    for (final (i, m) in StepMarker.values.indexed) {
+      final a = Annotation(id: i + 1, shape: StepShape(Offset(40 + i * 72.0, 50), style: m), color: const Color(0xFFE8332A), size: StrokeSize.large);
+      CanvasPainter.drawAnnotation(canvas, a, number: i + 1);
+      final b = CanvasPainter.stepBounds(Offset(40 + i * 72.0, 50), a.stepDiameter, m);
+      canvas.drawRect(b, Paint()..style = PaintingStyle.stroke..color = Colors.blue.withValues(alpha: 0.5));
+    }
+    final img = await rec.endRecording().toImage(480, 140);
+    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    File('$outDir/markers.png').writeAsBytesSync(bytes!.buffer.asUint8List());
   });
 }

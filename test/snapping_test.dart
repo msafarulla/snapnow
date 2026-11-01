@@ -74,8 +74,7 @@ void main() {
 
     final area = tester.getRect(find.byKey(const ValueKey('snaplite-canvas')));
     final k = key.currentState!.viewScale; // screen points per image point
-    final img = key.currentState!.state!.image;
-    final origin = area.center - Offset(img.width * k, img.height * k) / 2; // the image is centred at first
+    final origin = area.topLeft + key.currentState!.viewOrigin; // where the editor put the picture
     Offset onScreen(Offset p) => origin + p * k;
 
     // Drag the top image so it sits just under the first, 2 screen points off its left edge

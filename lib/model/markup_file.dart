@@ -133,7 +133,7 @@ class MarkupFile {
       CalloutShape(:final string, :final at, :final tail, :final runs) =>
         {'kind': 'callout', 'string': string, 'at': _pt(at), 'tail': tail == null ? null : _pt(tail),
           'runs': [for (final r in runs) _run(r)]},
-      StepShape(:final center) => {'kind': 'step', 'center': _pt(center)},
+      StepShape(:final center, :final style) => {'kind': 'step', 'center': _pt(center), 'style': style.name},
       ImageShape(:final rect, :final image) => {'kind': 'image', 'rect': _rc(rect), 'image': (images..add(await _png(image))).length - 1},
     };
     return {
@@ -146,6 +146,10 @@ class MarkupFile {
       ...shape,
     };
   }
+
+  /// Saved by name (stable if the enum is ever reordered); files from before step styles, or an unknown
+  /// name, give a circle.
+  static StepMarker _stepMarker(Object? v) => StepMarker.values.where((s) => s.name == v).firstOrNull ?? StepMarker.circle;
 
   static Future<Annotation> _parse(Object? j, Future<ui.Image> Function(Object?) image) async {
     if (j is! Map) throw const FormatException();
@@ -164,7 +168,7 @@ class MarkupFile {
       'text' => TextShape(j['string'] as String, _offset(j['at']), runs: _runs(j['runs'])),
       'callout' => CalloutShape(j['string'] as String, _offset(j['at']),
           tail: j['tail'] == null ? null : _offset(j['tail']), runs: _runs(j['runs'])),
-      'step' => StepShape(_offset(j['center'])),
+      'step' => StepShape(_offset(j['center']), style: _stepMarker(j['style'])),
       'image' => ImageShape(_rect(j['rect']), await image(j['image'])),
       _ => throw const FormatException(),
     };

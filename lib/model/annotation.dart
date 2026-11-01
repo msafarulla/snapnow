@@ -365,9 +365,17 @@ class CalloutShape extends Shape {
   const CalloutShape(this.string, this.at, {this.tail, this.runs = const []});
 }
 
+/// The marker a Step number sits in.
+enum StepMarker {
+  circle, rounded, square, diamond, hexagon, pin;
+
+  String get label => const ['Circle', 'Rounded square', 'Square', 'Diamond', 'Hexagon', 'Pin'][index];
+}
+
 class StepShape extends Shape {
   final Offset center;
-  const StepShape(this.center);
+  final StepMarker style;
+  const StepShape(this.center, {this.style = StepMarker.circle});
 }
 
 /// A pixelated patch cut from the base image (computed when the blur is created/moved).
@@ -500,7 +508,7 @@ class Annotation {
       TextShape(:final string, :final at, :final runs) => TextShape(string, at + d, runs: runs),
       CalloutShape(:final string, :final at, :final tail, :final runs) =>
         CalloutShape(string, at + d, tail: tail == null ? null : tail + d, runs: runs),
-      StepShape(:final center) => StepShape(center + d),
+      StepShape(:final center, :final style) => StepShape(center + d, style: style),
       _ => (rect != null) ? null : shape,
     };
     if (s == null) return withRect(rect!.shift(d));
@@ -523,7 +531,7 @@ class Annotation {
       TextShape(:final string, :final at, :final runs) => TextShape(string, sc(at), runs: runs),
       CalloutShape(:final string, :final at, :final tail, :final runs) =>
         CalloutShape(string, sc(at), tail: tail == null ? null : sc(tail), runs: runs),
-      StepShape(:final center) => StepShape(sc(center)),
+      StepShape(:final center, :final style) => StepShape(sc(center), style: style),
       RectShape(:final rect) => RectShape(scr(rect)),
       EllipseShape(:final rect) => EllipseShape(scr(rect)),
       HighlightShape(:final rect) => HighlightShape(scr(rect)),

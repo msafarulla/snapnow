@@ -150,6 +150,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });
     Native.getBool('pinOnTop').then((on) { if (on == true && !_pinTouched) _setPinned(true, save: false); });
     Native.getBool('inspector.hidden').then((hidden) { if (mounted && hidden == true) setState(() => _inspectorShown = false); });
+    Native.getString('step.style').then((v) {
+      final s = StepMarker.values.where((s) => s.name == v).firstOrNull;
+      if (mounted && s != null) setState(() => _stepMarker = s);
+    });
     _textController.addListener(_textChanged);
     Native.onColorPicked = (rgb) => pickColor(Color(0xFF000000 | rgb), refresh: false);
   }
@@ -558,7 +562,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             return Rect.fromLTWH(at.dx, at.dy, tp.width, tp.height);
           }(),
         CalloutShape(:final string, :final at) => CanvasPainter.calloutRect(string, at, a),
-        StepShape(:final center) => Rect.fromCircle(center: center, radius: a.stepDiameter / 2),
+        StepShape(:final center, :final style) => CanvasPainter.stepBounds(center, a.stepDiameter, style),
         _ => a.rect,
       };
 
@@ -1140,7 +1144,28 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   void _addStep(Offset p) {
-    _add(Annotation(id: _nextId++, scale: _density, shape: StepShape(p), color: _color, size: _size));
+    _add(Annotation(id: _nextId++, scale: _density, shape: StepShape(p, style: _stepMarker), color: _color, size: _size));
+  }
+
+  /// The marker shape new steps get (remembered as `step.style`); a selected step shows its own.
+  StepMarker _stepMarker = StepMarker.circle;
+
+  @override
+  StepMarker? get stepMarker {
+    final a = selected;
+    if (a != null) return a.shape is StepShape ? (a.shape as StepShape).style : null;
+    return _tool == Tool.step ? _stepMarker : null;
+  }
+
+  /// Picks the marker for new steps; a selected step changes to it.
+  @override
+  void pickStepMarker(StepMarker s) {
+    setState(() => _stepMarker = s);
+    Native.setString('step.style', s.name);
+    final a = selected;
+    if (a != null && a.shape is StepShape) {
+      _replace(a.copyWith(shape: StepShape((a.shape as StepShape).center, style: s)));
+    }
   }
 
   Future<void> _growAfterEdit() async {

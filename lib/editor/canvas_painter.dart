@@ -648,10 +648,54 @@ class CanvasPainter extends CustomPainter {
   /// Like clamp, but a box too small for the pointer's margins (lo > hi) gives the middle instead of throwing.
   static double _within(double v, double lo, double hi) => lo <= hi ? v.clamp(lo, hi) : (lo + hi) / 2;
 
+  /// The outline of a step marker of [style] whose number is centred at [center]; [d] is the step diameter.
+  /// Every style covers about the same area as the circle, so the number stays the same size.
+  static Path stepPath(Offset center, double d, StepMarker style) {
+    final r = d / 2;
+    final path = Path();
+    switch (style) {
+      case StepMarker.circle:
+        path.addOval(Rect.fromCircle(center: center, radius: r));
+      case StepMarker.rounded:
+        path.addRRect(RRect.fromRectXY(Rect.fromCircle(center: center, radius: r * 0.96), r * 0.42, r * 0.42));
+      case StepMarker.square:
+        path.addRect(Rect.fromCircle(center: center, radius: r * 0.92));
+      case StepMarker.diamond:
+        final s = r * 1.22;
+        path.addPolygon([center + Offset(0, -s), center + Offset(s, 0), center + Offset(0, s), center + Offset(-s, 0)], true);
+      case StepMarker.hexagon:
+        final s = r * 1.1;
+        path.addPolygon([for (var i = 0; i < 6; i++) center + Offset(s * math.sin(i * math.pi / 3), -s * math.cos(i * math.pi / 3))], true);
+      case StepMarker.pin:
+        // A map pin: the disc, with a point hanging below it
+        final disc = Path()..addOval(Rect.fromCircle(center: center, radius: r));
+        final tip = Path()
+          ..moveTo(center.dx - r * 0.78, center.dy + r * 0.62)
+          ..lineTo(center.dx, center.dy + d * 0.98)
+          ..lineTo(center.dx + r * 0.78, center.dy + r * 0.62)
+          ..close();
+        return Path.combine(PathOperation.union, disc, tip);
+    }
+    return path;
+  }
+
+  /// The area a step marker covers (its selection box and hit area).
+  static Rect stepBounds(Offset center, double d, StepMarker style) {
+    final r = d / 2;
+    return switch (style) {
+      StepMarker.pin => Rect.fromLTRB(center.dx - r, center.dy - r, center.dx + r, center.dy + d * 0.98),
+      StepMarker.diamond => Rect.fromCircle(center: center, radius: r * 1.22),
+      StepMarker.hexagon => Rect.fromCircle(center: center, radius: r * 1.1),
+      _ => Rect.fromCircle(center: center, radius: r),
+    };
+  }
+
   static void _step(Canvas canvas, Offset center, int number, Annotation a) {
     final d = a.stepDiameter;
-    canvas.drawCircle(center, d / 2, Paint()..color = a.color);
-    canvas.drawCircle(center, d / 2, _stroke(Colors.white.withValues(alpha: 0.9), math.max(1.5, d / 16)));
+    final style = a.shape is StepShape ? (a.shape as StepShape).style : StepMarker.circle;
+    final path = stepPath(center, d, style);
+    canvas.drawPath(path, Paint()..color = a.color);
+    canvas.drawPath(path, _stroke(Colors.white.withValues(alpha: 0.9), math.max(1.5, d / 16))..strokeJoin = StrokeJoin.round);
     final tp = TextPainter(
       text: TextSpan(text: '${math.max(number, 1)}',
           style: TextStyle(color: contrast(a.color), fontSize: d * 0.55, fontWeight: FontWeight.w900)),
