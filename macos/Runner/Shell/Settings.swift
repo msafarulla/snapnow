@@ -25,7 +25,7 @@ enum Prefs {
     static let wmPlacement = "watermark.placement"    // bottomRight | center | tiled
     static let wmOpacity = "watermark.opacity"        // 10…100 (percent); default 30
     static let wmPlacements = ["bottomRight", "center", "tiled"]
-    static var wmOpacityValue: Int { UserDefaults.standard.object(forKey: wmOpacity) == nil ? 30 : UserDefaults.standard.integer(forKey: wmOpacity) }
+    static var wmOpacityValue: Int { UserDefaults.standard.object(forKey: wmOpacity) == nil ? 8 : UserDefaults.standard.integer(forKey: wmOpacity) }
 
     /// A bool pref that defaults to true when it has never been set (plain `bool(forKey:)` would read false).
     static func onByDefault(_ key: String) -> Bool {
@@ -189,7 +189,7 @@ final class SettingsWindowController: NSWindowController {
         placement.target = self
         placement.action = #selector(watermarkPlacementChosen(_:))
         stack.addArrangedSubview(row("Placement", placement))
-        let opacity = NSSlider(value: Double(Prefs.wmOpacityValue), minValue: 10, maxValue: 100, target: self, action: #selector(watermarkOpacityChanged(_:)))
+        let opacity = NSSlider(value: Double(Prefs.wmOpacityValue), minValue: 5, maxValue: 100, target: self, action: #selector(watermarkOpacityChanged(_:)))
         opacity.widthAnchor.constraint(equalToConstant: 180).isActive = true
         stack.addArrangedSubview(row("Opacity", opacity))
         stack.addArrangedSubview(note("Your text and/or image are stamped on every capture at the chosen spot and opacity."))

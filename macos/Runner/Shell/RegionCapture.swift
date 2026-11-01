@@ -274,7 +274,7 @@ final class RegionCapture {
         v.wantsLayer = true
         v.layer?.borderColor = NSColor.systemBlue.cgColor
         v.layer?.borderWidth = 2
-        v.layer?.cornerRadius = 2
+        v.layer?.cornerRadius = min(min(r.width, r.height) * 0.025, 28)   // match the rounded capture
         w.contentView = v
         w.orderFrontRegardless()
         return w
@@ -398,6 +398,9 @@ private final class RegionView: NSView {
             return l.intersects(bounds) ? l : nil
         }
 
+        // Rounded corners, matching the rounded capture, so the selection previews the final shape.
+        func rad(_ r: CGRect) -> CGFloat { min(min(r.width, r.height) * 0.025, 28) }
+
         // Dim all but the focus and the offered last area (cleared out of the dim, so overlaps stay bright)
         let lit = [focus, capture.isDragging ? nil : capture.offered.map(local)].compactMap { $0 }
         ctx.saveGState()
@@ -405,13 +408,25 @@ private final class RegionView: NSView {
         ctx.setFillColor(NSColor.black.withAlphaComponent(0.4).cgColor)
         ctx.fill(bounds)
         ctx.setBlendMode(.clear)
-        lit.forEach { ctx.fill($0) }
+        for r in lit {
+            ctx.addPath(CGPath(roundedRect: r, cornerWidth: rad(r), cornerHeight: rad(r), transform: nil))
+            ctx.fillPath()
+        }
         ctx.endTransparencyLayer()
         ctx.restoreGState()
 
+        // A thin rounded outline around the active selection, showing the rounded shape while dragging
+        if capture.isDragging, let f = focus {
+            let sel = NSBezierPath(roundedRect: f, xRadius: rad(f), yRadius: rad(f))
+            sel.lineWidth = 1.5
+            Self.orange.setStroke()
+            sel.stroke()
+        }
+
         // The last area stays outlined (until a new drag), ready for Enter or a click
         if !capture.isDragging, let last = capture.offered.map(local), last.intersects(bounds) {
-            let border = NSBezierPath(rect: last.insetBy(dx: -1, dy: -1))
+            let r = rad(last)
+            let border = NSBezierPath(roundedRect: last.insetBy(dx: -1, dy: -1), xRadius: r, yRadius: r)
             border.lineWidth = 2
             NSColor.black.withAlphaComponent(0.55).setStroke()   // the gaps, so the ants read on any background
             border.stroke()
@@ -648,11 +663,15 @@ enum Watermark {
         let g = NSGraphicsContext(cgContext: ctx, flipped: false)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = g
+        // Soft-light blend: the watermark melts into the image (gently lightening/darkening it) instead of
+        // floating on top, so it reads as a subtle mark rather than pulling the eye.
+        ctx.saveGState()
+        ctx.setBlendMode(.softLight)
 
         // One watermark block centred at (cx, cy): the image fitted to imgW, with the text under it.
         func block(cx: CGFloat, cy: CGFloat, imgW: CGFloat, fontSize: CGFloat) {
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
+                .font: NSFont.systemFont(ofSize: fontSize, weight: .regular),  // light enough to recede
                 .foregroundColor: NSColor.white.withAlphaComponent(opacity),
             ]
             let ts = text.isEmpty ? CGSize.zero : (text as NSString).size(withAttributes: attrs)
@@ -675,8 +694,8 @@ enum Watermark {
         case "center":
             block(cx: W / 2, cy: H / 2, imgW: min(W, H) * 0.4, fontSize: max(24 * scale, H * 0.05))
         case "tiled":
-            let imgW = W * 0.13, fontSize = max(14 * scale, H * 0.02)
-            let stepX = max(W / 4, imgW * 1.6), stepY = max(H / 4, fontSize * 6)
+            let imgW = W * 0.11, fontSize = max(11 * scale, H * 0.015)
+            let stepX = max(W / 3.2, imgW * 2), stepY = max(H / 3.2, fontSize * 8)
             var y = stepY * 0.5
             while y < H {
                 var x = stepX * 0.5
@@ -684,15 +703,16 @@ enum Watermark {
                 y += stepY
             }
         default: // bottomRight, tucked above the timestamp corner
-            let imgW = min(W * 0.2, 240 * scale), fontSize = max(13 * scale, H * 0.02)
+            let imgW = min(W * 0.18, 220 * scale), fontSize = max(10 * scale, H * 0.014)
             let imgH = wm != nil ? imgW * CGFloat(wm!.height) / CGFloat(wm!.width) : 0
-            let probe: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize, weight: .semibold)]
+            let probe: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize, weight: .regular)]
             let ts = text.isEmpty ? CGSize.zero : (text as NSString).size(withAttributes: probe)
             let gap: CGFloat = (wm != nil && !text.isEmpty) ? fontSize * 0.3 : 0
             let blockW = max(wm != nil ? imgW : 0, ts.width), blockH = imgH + gap + ts.height
             let margin = fontSize * 1.4
             block(cx: W - margin - blockW / 2, cy: margin + blockH / 2, imgW: imgW, fontSize: fontSize)
         }
+        ctx.restoreGState()   // end the soft-light blend
         NSGraphicsContext.restoreGraphicsState()
         return ctx.makeImage()
     }
