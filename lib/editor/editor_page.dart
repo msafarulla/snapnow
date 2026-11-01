@@ -14,6 +14,7 @@ import 'package:file_saver/file_saver.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:window_manager/window_manager.dart';
 import '../app/app_controller.dart';
+import '../app/theme.dart';
 import '../export/build_up_gif.dart';
 import '../export/epicycles.dart';
 import '../model/annotation.dart';
@@ -29,7 +30,12 @@ import 'quick_styles.dart';
 import 'snapping.dart';
 
 class EditorPage extends StatefulWidget {
-  const EditorPage({super.key});
+  /// Room the host keeps covered by its own floating chrome (the Library's filmstrip at the bottom): the
+  /// picture is fitted and centred in what's left, so nothing hides under it.
+  final EdgeInsets chromeInsets;
+  /// An optional first group in the floating toolbar (the Library's back button).
+  final Widget? leading;
+  const EditorPage({super.key, this.chromeInsets = EdgeInsets.zero, this.leading});
   @override
   State<EditorPage> createState() => EditorPageState();
 }
@@ -143,6 +149,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Native.getBool('gifFourier').then((on) { if (mounted && on != null) setState(() => BuildUpGif.fourier = on); });
     Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });
     Native.getBool('pinOnTop').then((on) { if (on == true && !_pinTouched) _setPinned(true, save: false); });
+    Native.getBool('inspector.hidden').then((hidden) { if (mounted && hidden == true) setState(() => _inspectorShown = false); });
     _textController.addListener(_textChanged);
     Native.onColorPicked = (rgb) => pickColor(Color(0xFF000000 | rgb), refresh: false);
   }
@@ -274,6 +281,31 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   Offset _pan = Offset.zero; // origin offset from the centred position, while zoomed
   Offset _viewOrigin = Offset.zero; // from the last layout
   Size _viewSize = Size.zero;
+  EdgeInsets _viewInsets = EdgeInsets.zero; // the canvas area under floating chrome (toolbar, inspector, filmstrip)
+
+  // ---- Floating chrome ----
+
+  static const _chromeMargin = 10.0; // between a floating card and the window edge / another card
+  static const _toolbarHeight = 52.0;
+  bool _inspectorShown = true; // the properties card on the right (Settings persist it as inspector.hidden)
+
+  void _toggleInspector() {
+    setState(() => _inspectorShown = !_inspectorShown);
+    Native.setBool('inspector.hidden', !_inspectorShown);
+  }
+
+  /// Where the floating chrome sits over the canvas area, so the picture is fitted and centred in the rest.
+  EdgeInsets get _chromeInsets => widget.chromeInsets + EdgeInsets.only(
+        top: _toolbarHeight + _chromeMargin * 2,
+        right: _inspectorShown ? PropertiesPanel.width + _chromeMargin * 2 : 0,
+      );
+
+  /// The centred origin for an image of [size] at [scale], inside the chrome insets (shared by fit and zoom).
+  Offset _centredOrigin(Size size, double scaleX, double scaleY) {
+    final ins = _viewInsets;
+    return Offset(ins.left + (_viewSize.width - ins.horizontal - size.width * scaleX) / 2,
+        ins.top + (_viewSize.height - ins.vertical - size.height * scaleY) / 2);
+  }
   double _pinchStart = 1; // scale when a trackpad pinch began
   Offset? _panGrab; // Space-drag / middle-drag pan: last pointer position
 
@@ -292,10 +324,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     if (s == null || _viewSize.isEmpty) return;
     final dpr = MediaQuery.devicePixelRatioOf(context);
     final next = scale.clamp(0.1 / dpr, 8 / dpr).toDouble();
-    final f = focal ?? _viewSize.center(Offset.zero);
+    final f = focal ?? _viewInsets.deflateSize(_viewSize).center(_viewInsets.topLeft);
     final imagePoint = (f - _viewOrigin) / _viewScale;
     final origin = f - imagePoint * next;
-    final centred = Offset((_viewSize.width - s.image.width * next) / 2, (_viewSize.height - s.image.height * next) / 2);
+    final centred = _centredOrigin(Size(s.image.width.toDouble(), s.image.height.toDouble()), next, next);
     setState(() { _zoom = next; _pan = origin - centred; });
     // Several pinch updates can land before the next layout: keep the transform current for them
     _viewScale = next;
@@ -2233,25 +2265,25 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     );
   }
 
+  /// The window is the canvas: the picture sits on a plain backdrop and every control floats over it — the
+  /// toolbar card at the top, the properties card on the right, the zoom pill in the corner.
   Widget _scaffold(CanvasState? state) {
-    final scheme = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final chrome = SnapChrome.of(context);
+    const m = _chromeMargin;
+    final inspectorRoom = _inspectorShown ? PropertiesPanel.width + m : 0.0;
     return Scaffold(
-      backgroundColor: scheme.surface,
-      body: Column(children: [
-        _toolbar(),
-        Divider(height: 1, color: scheme.outlineVariant.withValues(alpha: 0.6)),
-        Expanded(
-          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Expanded(
-              child: Container(
-                color: dark ? const Color(0xFF1C1C1E) : const Color(0xFFE6E6E9),
-                child: state == null ? const Center(child: CircularProgressIndicator()) : _canvasArea(state),
-              ),
-            ),
-            PropertiesPanel(host: this),
-          ]),
-        ),
+      backgroundColor: chrome.backdrop,
+      body: Stack(children: [
+        Positioned.fill(child: state == null ? const Center(child: CircularProgressIndicator()) : _canvasArea(state)),
+        // The toolbar, centred over the part of the canvas the inspector leaves free
+        Positioned(top: m, left: m, right: m + inspectorRoom, height: _toolbarHeight, child: Center(child: _toolbar())),
+        if (_inspectorShown)
+          Positioned(
+            top: m,
+            right: m,
+            bottom: m + widget.chromeInsets.bottom,
+            child: PropertiesPanel(host: this, onClose: _toggleInspector),
+          ),
       ]),
     );
   }
@@ -2267,7 +2299,13 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       // the picture grainier without shrinking it on the canvas. Falls back to the current size pre-load.
       final dw = _originalSize?.width ?? iw, dh = _originalSize?.height ?? ih;
       final view = Size(constraints.maxWidth, constraints.maxHeight);
-      final fit = math.max(0.01, math.min(math.min((view.width - pad * 2) / dw, (view.height - pad * 2 - labelGap) / dh), 1.0));
+      // The picture is fitted into the area the floating chrome leaves free (toolbar above, inspector at the
+      // right, the host's filmstrip below); zoomed in, it may pan under the chrome, which is translucent.
+      final ins = _chromeInsets;
+      final free = Size(math.max(1, view.width - ins.horizontal), math.max(1, view.height - ins.vertical));
+      _viewSize = view;
+      _viewInsets = ins;
+      final fit = math.max(0.01, math.min(math.min((free.width - pad * 2) / dw, (free.height - pad * 2 - labelGap) / dh), 1.0));
       // image→view scale that fills that footprint with however many pixels the image now has, PER AXIS, so a
       // width-only (or height-only) pixel change keeps both the width and the height of the picture on screen
       // (it just gets grainier on the reduced axis) instead of stretching the other one. A manual zoom is
@@ -2276,17 +2314,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final scaleY = _zoom ?? (dh * fit / ih);
       final scale = scaleX; // representative scale for hit-test tolerances / zoom readout
       final fitted = Size(iw * scaleX, ih * scaleY); // == (dw*fit, dh*fit): the original footprint on both axes
-      final centred = Offset((view.width - fitted.width) / 2, (view.height - fitted.height) / 2);
+      final centred = _centredOrigin(Size(iw, ih), scaleX, scaleY);
       // Centred on an axis where the image fits; otherwise pannable, but never further than its edge + pad
-      double axis(double c, double p, double viewLen, double len) =>
-          len + pad * 2 <= viewLen ? c : (c + p).clamp(viewLen - len - pad, pad).toDouble();
-      final origin = Offset(axis(centred.dx, _pan.dx, view.width, fitted.width),
-          axis(centred.dy, _pan.dy, view.height, fitted.height));
+      double axis(double c, double p, double start, double freeLen, double len) =>
+          len + pad * 2 <= freeLen ? c : (c + p).clamp(start + freeLen - len - pad, start + pad).toDouble();
+      final origin = Offset(axis(centred.dx, _pan.dx, ins.left, free.width, fitted.width),
+          axis(centred.dy, _pan.dy, ins.top, free.height, fitted.height));
       _pan = origin - centred; // drop pan that the clamp swallowed, so panning back responds at once
       _viewScale = scale;
       _viewScaleY = scaleY;
       _viewOrigin = origin;
-      _viewSize = view;
       Offset toImage(Offset local) => Offset((local.dx - origin.dx) / scaleX, (local.dy - origin.dy) / scaleY);
       final kind = StyleKind.ofTool(_tool);
       return ClipRect(child: DragTarget<String>(
@@ -2386,7 +2423,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             if (_formatBarTarget case final a?) _formatBar(a, origin, scale, Size(constraints.maxWidth, constraints.maxHeight)),
             if (_thicknessTarget case final a?) _thicknessSlider(a, origin, scale, Size(constraints.maxWidth, constraints.maxHeight)),
             if (_colorBarTarget case final a?) _colorBar(a, origin, scale, Size(constraints.maxWidth, constraints.maxHeight)),
-            Positioned(right: 12, bottom: 12, child: _zoomPill()),
+            Positioned(right: ins.right + 12, bottom: ins.bottom + 12, child: _zoomPill()),
             if (_gifPreview case final gif?) Positioned.fill(child: _gifPreviewCard(gif)),
           ]),
         ),
@@ -2444,26 +2481,27 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         icon: Icon(i, size: 16), tooltip: tip, onPressed: onTap, visualDensity: VisualDensity.compact,
         constraints: const BoxConstraints.tightFor(width: 28, height: 28), padding: EdgeInsets.zero);
     final mod = Platform.isMacOS ? '⌘' : 'Ctrl+';
-    return Material(
+    return Container(
       key: const ValueKey('snaplite-zoom'),
-      color: scheme.surfaceContainerHigh.withValues(alpha: 0.92),
-      elevation: 2,
-      shape: const StadiumBorder(),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          icon(Icons.remove, 'Zoom out ($mod−)', zoomOut),
-          InkWell(
-            onTap: _zoomed ? zoomToFit : zoomActualSize,
-            customBorder: const StadiumBorder(),
-            child: Tooltip(
-              message: _zoomed ? 'Fit to window (${mod}0)' : 'Actual size (${mod}1)',
-              child: SizedBox(width: 48, child: Text(label, textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, fontFeatures: const [FontFeature.tabularFigures()], color: scheme.onSurface))),
+      decoration: SnapChrome.of(context).pill(),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            icon(Icons.remove, 'Zoom out ($mod−)', zoomOut),
+            InkWell(
+              onTap: _zoomed ? zoomToFit : zoomActualSize,
+              customBorder: const StadiumBorder(),
+              child: Tooltip(
+                message: _zoomed ? 'Fit to window (${mod}0)' : 'Actual size (${mod}1)',
+                child: SizedBox(width: 48, child: Text(label, textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, fontFeatures: const [FontFeature.tabularFigures()], color: scheme.onSurface))),
+              ),
             ),
-          ),
-          icon(Icons.add, 'Zoom in ($mod+)', zoomIn),
-        ]),
+            icon(Icons.add, 'Zoom in ($mod+)', zoomIn),
+          ]),
+        ),
       ),
     );
   }
@@ -2620,15 +2658,19 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   CanvasState? _thicknessSnapshot; // state before a slider drag, for one undo step
 
+  /// The part of the canvas area not under floating chrome, where the floating bars are kept.
+  Rect _freeRect(Size area) => _viewInsets.deflateRect(Offset.zero & area);
+
   Widget _thicknessSlider(Annotation a, Offset origin, double scale, Size area) {
     final b = _boxOf(a);
     final box = Rect.fromLTRB(origin.dx + b.left * scale, origin.dy + b.top * scale, origin.dx + b.right * scale,
         origin.dy + b.bottom * scale);
     const w = _ThicknessCard.width, h = _ThicknessCard.height, gap = 14.0;
     var left = box.right + gap;
-    if (left + w > area.width - 8) left = box.left - gap - w;
-    left = left.clamp(8.0, math.max(8.0, area.width - w - 8));
-    final top = (box.center.dy - h / 2).clamp(8.0, math.max(8.0, area.height - h - 8)).toDouble();
+    final free = _freeRect(area);
+    if (left + w > free.right - 8) left = box.left - gap - w;
+    left = left.clamp(free.left + 8, math.max(free.left + 8, free.right - w - 8));
+    final top = (box.center.dy - h / 2).clamp(free.top + 8, math.max(free.top + 8, free.bottom - h - 8)).toDouble();
     return Positioned(
       left: left,
       top: top,
@@ -2678,8 +2720,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     const gap = 12.0;
     var top = box.top - gap - h;
     if (top < 8) top = box.bottom + gap;
-    top = top.clamp(8.0, math.max(8.0, area.height - h - 8));
-    final left = (box.center.dx - w / 2).clamp(8.0, math.max(8.0, area.width - w - 8)).toDouble();
+    final free = _freeRect(area);
+    top = top.clamp(free.top + 8, math.max(free.top + 8, free.bottom - h - 8));
+    final left = (box.center.dx - w / 2).clamp(free.left + 8, math.max(free.left + 8, free.right - w - 8)).toDouble();
     return Positioned(
       left: left,
       top: top,
@@ -2704,9 +2747,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         origin.dy + b.bottom * scale);
     const gap = 12.0, width = TextFormatBar.width, height = 120.0;
     var left = box.right + gap;
-    if (left + width > area.width - 8) left = box.left - gap - width;
-    left = left.clamp(8.0, math.max(8.0, area.width - width - 8));
-    final top = box.top.clamp(8.0, math.max(8.0, area.height - height - 8)).toDouble();
+    final free = _freeRect(area);
+    if (left + width > free.right - 8) left = box.left - gap - width;
+    left = left.clamp(free.left + 8, math.max(free.left + 8, free.right - width - 8));
+    final top = box.top.clamp(free.top + 8, math.max(free.top + 8, free.bottom - height - 8)).toDouble();
     return Positioned(left: left, top: top, child: TextFormatBar(host: this));
   }
 
@@ -2816,61 +2860,103 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         case 'settings': Native.shell('settings');
       }
     }
-    return Container(
-      height: 58,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Row(children: [
-        Expanded(
-          child: LayoutBuilder(builder: (context, c) {
-            const toolW = 62.0, moreW = 66.0; // per-button footprint; More only when something overflows
-            final int n; // how many items show as buttons
-            if (items.length * toolW <= c.maxWidth) {
-              n = items.length; // everything fits: no More
-            } else {
-              n = ((c.maxWidth - moreW) / toolW).floor().clamp(0, items.length); // leave room for More
-            }
-            final shown = items.sublist(0, n);
-            final hidden = items.sublist(n);
-            final moreActive = hidden.any((i) => i.$1 == barTool.name);
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                for (final i in shown)
-                  _ToolButton(icon: i.$2, label: i.$3, active: i.$1 == barTool.name, onTap: () => run(i.$1)),
-                if (hidden.isNotEmpty)
-                  _MoreButton(
-                    active: moreActive,
-                    label: moreActive ? _toolInfo[barTool]!.$2 : 'More',
-                    icon: moreActive ? _toolInfo[barTool]!.$1 : Icons.expand_more,
-                    items: hidden,
-                    onSelected: run,
-                  ),
-              ]),
-            );
-          }),
-        ),
-        // The window is for annotating: on macOS Save, Copy, Pin and the rest live in the menu bar
-        _ToolButton(icon: Icons.undo, label: 'Undo', onTap: _undo.isEmpty ? null : _undoAction),
-        _ToolButton(icon: Icons.redo, label: 'Redo', onTap: _redo.isEmpty ? null : _redoAction),
-        if (Platform.isMacOS) KeyedSubtree(key: _shareKey, child: _ToolButton(icon: Icons.ios_share, label: 'Share', onTap: share)),
-        if (!Platform.isMacOS) ...[
-          const SizedBox(width: 6),
-          _ToolButton(icon: Icons.content_copy, label: 'Copy', onTap: _copyImage),
-          _ToolButton(icon: Icons.save_outlined, label: 'Save', onTap: save, primary: hasUnsavedChanges),
-        ],
-      ]),
-    );
+    // The fixed groups: the host's leading button, Undo/Redo, then Share (and Copy/Save off macOS, where
+    // there is no menu bar for them) and the inspector toggle.
+    final leading = widget.leading;
+    final trailing = <Widget>[
+      _ToolButton(icon: Icons.undo, label: 'Undo', onTap: _undo.isEmpty ? null : _undoAction),
+      _ToolButton(icon: Icons.redo, label: 'Redo', onTap: _redo.isEmpty ? null : _redoAction),
+      const _ToolbarGap(),
+      if (Platform.isMacOS) KeyedSubtree(key: _shareKey, child: _ToolButton(icon: Icons.ios_share, label: 'Share', onTap: share)),
+      if (!Platform.isMacOS) ...[
+        _ToolButton(icon: Icons.content_copy, label: 'Copy', onTap: _copyImage),
+        _ToolButton(icon: Icons.save_outlined, label: 'Save', onTap: save, primary: hasUnsavedChanges),
+      ],
+      _ToolButton(
+        icon: _inspectorShown ? Icons.view_sidebar : Icons.view_sidebar_outlined,
+        label: 'Inspector',
+        active: _inspectorShown,
+        tooltip: _inspectorShown ? 'Hide the properties panel' : 'Show the properties panel',
+        onTap: _toggleInspector,
+      ),
+    ];
+    final fixedButtons = trailing.where((w) => w is! _ToolbarGap).length + (leading != null ? 1 : 0);
+    final fixedGaps = 2 + (leading != null ? 1 : 0); // leading | tools | undo/redo | share
+    return LayoutBuilder(builder: (context, c) {
+      const toolW = _ToolButton.width + 2, moreW = toolW; // per-button footprint; More only when something overflows
+      final room = c.maxWidth - _ToolbarCard.padding * 2 - fixedButtons * toolW - fixedGaps * _ToolbarGap.width;
+      final int n; // how many items show as buttons
+      if (items.length * toolW <= room) {
+        n = items.length; // everything fits: no More
+      } else {
+        n = ((room - moreW) / toolW).floor().clamp(0, items.length); // leave room for More
+      }
+      final shown = items.sublist(0, n);
+      final hidden = items.sublist(n);
+      final moreActive = hidden.any((i) => i.$1 == barTool.name);
+      return _ToolbarCard(children: [
+        if (leading != null) ...[leading, const _ToolbarGap()],
+        for (final i in shown)
+          _ToolButton(icon: i.$2, label: i.$3, active: i.$1 == barTool.name, onTap: () => run(i.$1)),
+        if (hidden.isNotEmpty)
+          _MoreButton(
+            active: moreActive,
+            label: moreActive ? _toolInfo[barTool]!.$2 : 'More',
+            icon: moreActive ? _toolInfo[barTool]!.$1 : Icons.more_horiz,
+            items: hidden,
+            onSelected: run,
+          ),
+        const _ToolbarGap(),
+        ...trailing,
+      ]);
+    });
   }
 }
 
-/// A toolbar button with the icon over its label (the Swift app's toolbar look); the active tool
-/// gets an accent bar underneath.
-class _ToolButton extends StatefulWidget {
+/// The floating toolbar: one chrome card holding the tool buttons, hugging its content.
+class _ToolbarCard extends StatelessWidget {
+  static const padding = 4.0;
+  final List<Widget> children;
+  const _ToolbarCard({required this.children});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: EditorPageState._toolbarHeight,
+        padding: const EdgeInsets.symmetric(horizontal: padding),
+        decoration: SnapChrome.of(context).decoration(),
+        child: Row(mainAxisSize: MainAxisSize.min, children: children),
+      );
+}
+
+/// A hairline between toolbar groups.
+class _ToolbarGap extends StatelessWidget {
+  static const width = 13.0;
+  const _ToolbarGap();
+  @override
+  Widget build(BuildContext context) => Container(
+      width: 1, height: 24, margin: const EdgeInsets.symmetric(horizontal: 6), color: Theme.of(context).colorScheme.outlineVariant);
+}
+
+/// A toolbar button: the icon over a small label. The active tool sits in a tinted capsule; hovering lifts
+/// the others slightly. Used by the Library for its back button too.
+class ToolbarButton extends StatelessWidget {
   final IconData icon;
   final String label;
+  final String? tooltip;
+  final VoidCallback? onTap;
+  const ToolbarButton({super.key, required this.icon, required this.label, this.onTap, this.tooltip});
+  @override
+  Widget build(BuildContext context) => _ToolButton(icon: icon, label: label, onTap: onTap, tooltip: tooltip);
+}
+
+class _ToolButton extends StatefulWidget {
+  static const width = 52.0;
+  final IconData icon;
+  final String label;
+  final String? tooltip;
   final bool active, primary;
   final VoidCallback? onTap;
-  const _ToolButton({required this.icon, required this.label, this.active = false, this.primary = false, this.onTap});
+  const _ToolButton({required this.icon, required this.label, this.active = false, this.primary = false, this.onTap, this.tooltip});
   @override
   State<_ToolButton> createState() => _ToolButtonState();
 }
@@ -2882,35 +2968,36 @@ class _ToolButtonState extends State<_ToolButton> {
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
     final enabled = widget.onTap != null;
-    final fg = !enabled ? s.onSurface.withValues(alpha: 0.3)
+    final fg = !enabled ? s.onSurface.withValues(alpha: 0.28)
         : widget.active || widget.primary ? s.primary : _hover ? s.onSurface : s.onSurfaceVariant;
-    return MouseRegion(
+    final button = MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
+      cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
       child: GestureDetector(
         onTap: widget.onTap,
-        child: Container(
-          constraints: const BoxConstraints(minWidth: 54),
-          height: 50,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 90),
+          width: _ToolButton.width,
+          height: EditorPageState._toolbarHeight - 8,
           margin: const EdgeInsets.symmetric(horizontal: 1),
-          padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
-            color: _hover && enabled && !widget.active ? s.surfaceContainerHighest.withValues(alpha: 0.7) : Colors.transparent,
-            borderRadius: BorderRadius.circular(7),
+            color: widget.active ? s.primary.withValues(alpha: 0.14)
+                : _hover && enabled ? s.onSurface.withValues(alpha: 0.07) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
           ),
-          child: Stack(alignment: Alignment.center, children: [
-            Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(widget.icon, size: 20, color: fg),
-              const SizedBox(height: 3),
-              Text(widget.label, style: TextStyle(fontSize: 10.5, color: fg, fontWeight: widget.active ? FontWeight.w600 : FontWeight.w400)),
-            ]),
-            if (widget.active)
-              Positioned(left: 8, right: 8, bottom: 0,
-                  child: Container(height: 2, decoration: BoxDecoration(color: s.primary, borderRadius: BorderRadius.circular(1)))),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(widget.icon, size: 19, color: fg),
+            const SizedBox(height: 2),
+            Text(widget.label, maxLines: 1, overflow: TextOverflow.clip, softWrap: false,
+                style: TextStyle(fontSize: 10, height: 1.1, color: fg, letterSpacing: -0.1,
+                    fontWeight: widget.active ? FontWeight.w600 : FontWeight.w500)),
           ]),
         ),
       ),
     );
+    final tip = widget.tooltip;
+    return tip == null ? button : Tooltip(message: tip, child: button);
   }
 }
 
@@ -2938,7 +3025,7 @@ class _MoreButton extends StatelessWidget {
               Icon(i.$2, size: 17), const SizedBox(width: 10), Text(i.$3, style: const TextStyle(fontSize: 13)),
             ])),
       ],
-      child: IgnorePointer(child: _ToolButton(icon: icon, label: '$label ▾', active: active, onTap: () {})),
+      child: IgnorePointer(child: _ToolButton(icon: icon, label: label, active: active, onTap: () {})),
     );
   }
 }
@@ -3265,12 +3352,7 @@ class _ThicknessCard extends StatelessWidget {
       width: width,
       height: height,
       padding: const EdgeInsets.only(top: 6, bottom: 4),
-      decoration: BoxDecoration(
-        color: s.surface.withValues(alpha: 0.9),
-        borderRadius: BorderRadius.circular(width / 2),
-        border: Border.all(color: s.outlineVariant.withValues(alpha: 0.7), width: 0.8),
-        boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 6, offset: Offset(0, 1))],
-      ),
+      decoration: SnapChrome.of(context).pill(),
       child: Column(children: [
         Text('${value.round()}', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: s.onSurfaceVariant)),
         Expanded(
@@ -3311,7 +3393,7 @@ class _ThicknessCard extends StatelessWidget {
 class _ColorBar extends StatelessWidget {
   static const _dot = 20.0, _gap = 6.0, _pad = 8.0, _menu = 62.0, _row2 = 28.0;
   static double widthFor(bool lines) => math.max(_pad * 2 + (PropertiesPanel.colors.length + 1) * (_dot + _gap) - _gap,
-      lines ? _pad * 2 + 3 * _menu + 2 * 4 + 28 + 28 : 0);
+      lines ? _pad * 2 + 3 * _menu + 2 * 4 + 28 + 28 + 6 : 0);
   static double heightFor(bool lines) => _dot + _pad * 2 + (lines ? _row2 + 6 : 0);
   final Color selected;
   final ValueChanged<Color> onPick;
@@ -3364,12 +3446,7 @@ class _ColorBar extends StatelessWidget {
       key: const ValueKey('snaplite-colorbar'),
       width: widthFor(st != null),
       padding: const EdgeInsets.all(_pad),
-      decoration: BoxDecoration(
-        color: s.surface.withValues(alpha: 0.95),
-        borderRadius: BorderRadius.circular(st != null ? 14 : heightFor(false) / 2),
-        border: Border.all(color: s.outlineVariant.withValues(alpha: 0.7), width: 0.8),
-        boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 6, offset: Offset(0, 1))],
-      ),
+      decoration: SnapChrome.of(context).decoration(radius: st != null ? 14 : heightFor(false) / 2),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         colours,
         if (st != null) ...[
@@ -3452,11 +3529,7 @@ class _MiniMenu<T> extends StatelessWidget {
         width: _ColorBar._menu,
         height: _ColorBar._row2,
         padding: const EdgeInsets.only(left: 4, right: 2),
-        decoration: BoxDecoration(
-          color: s.surface,
-          borderRadius: BorderRadius.circular(7),
-          border: Border.all(color: s.outlineVariant),
-        ),
+        decoration: SnapChrome.of(context).controlBox(),
         child: Row(children: [
           Expanded(child: FittedBox(child: SizedBox(width: 48, height: 18, child: current.$3 ?? Text(current.$2)))),
           Icon(Icons.unfold_more, size: 12, color: s.onSurfaceVariant),

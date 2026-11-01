@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import '../app/app_controller.dart';
 import '../app/app_menu.dart';
+import '../app/theme.dart';
 import '../editor/editor_page.dart';
 import '../platform/native.dart';
 
@@ -131,10 +132,12 @@ class LibraryPageState extends State<LibraryPage> {
   }
 
 
+  static const _filmTileWidth = 112.0, _filmGap = 8.0, _filmHeight = 92.0;
+
   void _scrollFilmstripTo(String path) {
     final i = _files.indexWhere((f) => f.path == path);
     if (i < 0 || !_filmScroll.hasClients) return;
-    final target = (i * 136.0 - (_filmScroll.position.viewportDimension - 128) / 2)
+    final target = (i * (_filmTileWidth + _filmGap) - (_filmScroll.position.viewportDimension - _filmTileWidth) / 2)
         .clamp(0.0, _filmScroll.position.maxScrollExtent);
     _filmScroll.animateTo(target, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
   }
@@ -240,7 +243,7 @@ class LibraryPageState extends State<LibraryPage> {
     final scheme = Theme.of(context).colorScheme;
     final shown = _shown;
     return Scaffold(
-      backgroundColor: scheme.surfaceContainerLow,
+      backgroundColor: SnapChrome.of(context).backdrop,
       body: CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.enter): () => _open(_selection),
@@ -257,42 +260,55 @@ class LibraryPageState extends State<LibraryPage> {
           autofocus: true,
           child: Column(children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+              padding: const EdgeInsets.fromLTRB(18, 14, 14, 6),
               child: Row(children: [
+                Text('Library', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(width: 10),
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(shown.length == 1 ? '1 capture' : '${shown.length} captures',
+                      style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+                ),
+                const Spacer(),
                 SizedBox(
-                  width: 240,
-                  height: 32,
+                  width: 220,
+                  height: 30,
                   child: TextField(
                     onChanged: (v) => setState(() => _query = v),
-                    style: const TextStyle(fontSize: 13),
+                    style: const TextStyle(fontSize: 12.5),
                     decoration: InputDecoration(
-                      hintText: 'Search captures',
-                      prefixIcon: const Icon(Icons.search, size: 18),
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      hintText: 'Search',
+                      prefixIcon: Icon(Icons.search, size: 16, color: scheme.onSurfaceVariant),
+                      prefixIconConstraints: const BoxConstraints(minWidth: 30),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(999), borderSide: BorderSide.none),
+                      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(999), borderSide: BorderSide(color: SnapChrome.of(context).controlBorder, width: 0.8)),
+                      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(999), borderSide: BorderSide(color: scheme.primary, width: 1.5)),
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
-                Text(shown.length == 1 ? '1 capture' : '${shown.length} captures',
-                    style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
-                const Spacer(),
-                TextButton.icon(
+                const SizedBox(width: 6),
+                IconButton(
+                  tooltip: 'Show in Finder',
                   onPressed: () => Native.openPath(AppController.capturesFolder),
                   icon: const Icon(Icons.folder_outlined, size: 18),
-                  label: const Text('Show in Finder'),
                 ),
               ]),
             ),
             Expanded(
               child: shown.isEmpty
-                  ? Center(child: Text(_files.isEmpty ? 'No captures yet' : 'No matches',
-                      style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant)))
+                  ? Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.photo_library_outlined, size: 36, color: scheme.onSurfaceVariant.withValues(alpha: 0.5)),
+                        const SizedBox(height: 10),
+                        Text(_files.isEmpty ? 'No captures yet' : 'No matches',
+                            style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant)),
+                      ]),
+                    )
                   : GridView.builder(
-                      padding: const EdgeInsets.all(14),
+                      padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
                       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: 220, mainAxisExtent: 168, crossAxisSpacing: 12, mainAxisSpacing: 12),
+                        maxCrossAxisExtent: 236, mainAxisExtent: 176, crossAxisSpacing: 14, mainAxisSpacing: 14),
                       itemCount: shown.length,
                       itemBuilder: (context, i) => _gridTile(shown[i].path),
                     ),
@@ -322,44 +338,36 @@ class LibraryPageState extends State<LibraryPage> {
     );
   }
 
+  /// Edit mode: the editor fills the window; its floating toolbar starts with the back button, and the
+  /// filmstrip of all captures floats along the bottom (the editor keeps the picture clear of it).
   Widget _editMode(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    const m = 10.0;
     return Scaffold(
-      body: Column(children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Row(children: [
-            TextButton.icon(
-              onPressed: showGrid,
-              icon: const Icon(Icons.chevron_left),
-              label: const Text('Library'),
-            ),
-            Expanded(
-              child: Text(_editingPath?.split('/').last ?? '', textAlign: TextAlign.center,
-                  overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant)),
-            ),
-            const SizedBox(width: 96),
-          ]),
-        ),
-        const Divider(height: 1),
-        Expanded(child: EditorPage(key: AppController.instance.editorKey)),
-        const Divider(height: 1),
-        Container(
-          height: 112,
-          color: scheme.surfaceContainer,
-          child: ListView.separated(
-            controller: _filmScroll,
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            itemCount: _files.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (context, i) => _filmTile(_files[i].path),
+      body: Stack(children: [
+        Positioned.fill(
+          child: EditorPage(
+            key: AppController.instance.editorKey,
+            chromeInsets: const EdgeInsets.only(bottom: _filmHeight + m * 2),
+            leading: ToolbarButton(icon: Icons.photo_library_outlined, label: 'Library', tooltip: 'Back to the Library (Esc saves and closes)', onTap: showGrid),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 2, bottom: 6),
-          child: Text('Drag a thumbnail onto the image above to drop it in.',
-              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
+        Positioned(
+          left: m,
+          right: m,
+          bottom: m,
+          height: _filmHeight,
+          child: Container(
+            decoration: SnapChrome.of(context).decoration(),
+            clipBehavior: Clip.antiAlias,
+            child: ListView.separated(
+              controller: _filmScroll,
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              itemCount: _files.length,
+              separatorBuilder: (_, __) => const SizedBox(width: _filmGap),
+              itemBuilder: (context, i) => _filmTile(_files[i].path),
+            ),
+          ),
         ),
       ]),
     );
@@ -367,7 +375,7 @@ class LibraryPageState extends State<LibraryPage> {
 
   Widget _filmTile(String path) {
     final tile = SizedBox(
-      width: 128,
+      width: _filmTileWidth,
       child: _Tile(
         path: path,
         name: _name(path),
@@ -378,23 +386,27 @@ class LibraryPageState extends State<LibraryPage> {
         onDelete: () => _trashFromFilmstrip(path),
       ),
     );
-    final clickable = GestureDetector(
-      onTap: () => _isImage(path) ? openForEditing(path) : Native.openPath(path),
-      onSecondaryTapUp: (d) => _contextMenu(path, d.globalPosition),
-      child: tile,
+    final clickable = Tooltip(
+      message: _isImage(path) ? '${_name(path)}\nClick to edit · drag onto the picture to insert it' : _name(path),
+      waitDuration: const Duration(milliseconds: 900),
+      child: GestureDetector(
+        onTap: () => _isImage(path) ? openForEditing(path) : Native.openPath(path),
+        onSecondaryTapUp: (d) => _contextMenu(path, d.globalPosition),
+        child: tile,
+      ),
     );
     if (!_isImage(path)) return clickable;
     return Draggable<String>(
       data: path,
-      feedback: Opacity(opacity: 0.85, child: Material(color: Colors.transparent, child: SizedBox(height: 96, child: tile))),
+      feedback: Opacity(opacity: 0.85, child: Material(color: Colors.transparent, child: SizedBox(height: 76, child: tile))),
       childWhenDragging: Opacity(opacity: 0.4, child: tile),
       child: clickable,
     );
   }
 }
 
-/// A capture thumbnail card (Quick Look image, name, video/GIF badge, selection ring). Hovering shows a
-/// ✕ at the top-left that moves the capture to the Trash.
+/// A capture thumbnail card: the picture on a rounded, borderless tile, its name underneath, a video/GIF
+/// badge, and an accent ring when selected. Hovering lifts it and shows a ✕ that moves it to the Trash.
 class _Tile extends StatefulWidget {
   final String path, name;
   final Future<Uint8List?> thumb;
@@ -415,40 +427,52 @@ class _TileState extends State<_Tile> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final chrome = SnapChrome.of(context);
     final w = widget;
-    final card = Container(
+    final radius = w.compact ? 8.0 : 10.0;
+    final picture = AnimatedContainer(
+      duration: const Duration(milliseconds: 120),
+      padding: EdgeInsets.all(w.compact ? 3 : 6),
       decoration: BoxDecoration(
-        color: w.selected ? scheme.primary.withValues(alpha: 0.15) : scheme.surface,
-        borderRadius: BorderRadius.circular(w.compact ? 8 : 10),
-        border: Border.all(color: w.selected ? scheme.primary : (_hover ? scheme.outline : scheme.outlineVariant),
-            width: w.selected ? 2 : 1),
-        boxShadow: _hover ? const [BoxShadow(color: Color(0x22000000), blurRadius: 8, offset: Offset(0, 2))] : null,
+        color: w.selected ? scheme.primary.withValues(alpha: 0.12) : chrome.raised.withValues(alpha: w.compact ? 0.6 : 1),
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(
+            color: w.selected ? scheme.primary : (_hover ? scheme.outline : chrome.border), width: w.selected ? 2 : 0.8),
+        boxShadow: _hover && !w.compact
+            ? const [BoxShadow(color: Color(0x2E000000), blurRadius: 14, offset: Offset(0, 5))]
+            : const [BoxShadow(color: Color(0x14000000), blurRadius: 3, offset: Offset(0, 1))],
       ),
-      padding: EdgeInsets.all(w.compact ? 4 : 8),
-      child: Column(children: [
-        Expanded(
-          child: Stack(fit: StackFit.expand, children: [
-            FutureBuilder<Uint8List?>(
-              future: w.thumb,
-              builder: (context, snap) => snap.data == null
-                  ? const SizedBox()
-                  : Image.memory(snap.data!, fit: BoxFit.contain, gaplessPlayback: true, filterQuality: FilterQuality.medium),
-            ),
-            if (w.badge != null)
-              Positioned(
-                left: 4,
-                bottom: 4,
-                child: Icon(w.badge, size: 16, color: Colors.white, shadows: const [Shadow(blurRadius: 3)]),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius - 4),
+        child: Stack(fit: StackFit.expand, children: [
+          FutureBuilder<Uint8List?>(
+            future: w.thumb,
+            builder: (context, snap) => snap.data == null
+                ? const SizedBox()
+                : Image.memory(snap.data!, fit: BoxFit.contain, gaplessPlayback: true, filterQuality: FilterQuality.medium),
+          ),
+          if (w.badge != null)
+            Positioned(
+              left: 4,
+              bottom: 4,
+              child: Container(
+                padding: const EdgeInsets.all(3),
+                decoration: const BoxDecoration(color: Color(0x99000000), shape: BoxShape.circle),
+                child: Icon(w.badge, size: 12, color: Colors.white),
               ),
-          ]),
-        ),
-        if (!w.compact) ...[
-          const SizedBox(height: 6),
-          Text(w.name, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant)),
-        ],
-      ]),
+            ),
+        ]),
+      ),
     );
+    final card = Column(children: [
+      Expanded(child: picture),
+      if (!w.compact) ...[
+        const SizedBox(height: 7),
+        Text(w.name, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11.5, color: w.selected ? scheme.onSurface : scheme.onSurfaceVariant,
+                fontWeight: w.selected ? FontWeight.w500 : FontWeight.w400)),
+      ],
+    ]);
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -456,8 +480,8 @@ class _TileState extends State<_Tile> {
         Positioned.fill(child: card),
         if (_hover && w.onDelete != null)
           Positioned(
-            left: 4,
-            top: 4,
+            left: w.compact ? 2 : 4,
+            top: w.compact ? 2 : 4,
             child: Tooltip(
               message: 'Move to Trash',
               waitDuration: const Duration(milliseconds: 600),

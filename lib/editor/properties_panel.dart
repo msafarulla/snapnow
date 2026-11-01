@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../app/size_chooser.dart';
+import '../app/theme.dart';
 import '../export/build_up_gif.dart';
 import '../model/annotation.dart';
 import 'canvas_painter.dart';
@@ -43,7 +44,7 @@ abstract class PanelHost {
   void styleSelection(CharStyle Function(CharStyle) change);
 }
 
-/// The right-hand panel, as in the Swift app: Styles for the current kind, then its properties.
+/// The inspector: a floating card on the right with Styles for the current kind, then its properties.
 /// It edits the selected annotation when there is one, otherwise the defaults for the active tool.
 class PropertiesPanel extends StatelessWidget {
   static const width = 296.0; // wide enough that a tool's options fit without scrolling
@@ -53,7 +54,8 @@ class PropertiesPanel extends StatelessWidget {
   ];
 
   final PanelHost host;
-  const PropertiesPanel({super.key, required this.host});
+  final VoidCallback? onClose; // hides the card (the toolbar's Inspector button brings it back)
+  const PropertiesPanel({super.key, required this.host, this.onClose});
 
   String get _title {
     final a = host.selected;
@@ -95,28 +97,33 @@ class PropertiesPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final t = Theme.of(context);
     final kids = <Widget>[];
     final kind = _kind;
 
+    // Header: what is being edited, the My Styles menu and the close button
+    kids.add(Row(children: [
+      Expanded(child: _heading(context, _title)),
+      if (kind != null)
+        PopupMenuButton<String>(
+          tooltip: 'My Styles',
+          icon: const Icon(Icons.settings_outlined, size: 17),
+          iconSize: 17,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          onSelected: (v) => v == 'save' ? host.saveCurrentStyle() : host.clearSavedStyles(),
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'save', height: 32, child: Text('Save Current Style')),
+            PopupMenuItem(value: 'clear', height: 32, child: Text('Clear My Styles for ${_title.replaceAll(' Tool', '')}')),
+          ],
+        ),
+      if (onClose != null) ...[
+        const SizedBox(width: 2),
+        _IconTap(icon: Icons.close, tooltip: 'Hide the inspector', onTap: onClose!),
+      ],
+    ]));
+
     if (kind != null) {
-      kids.addAll([
-        Row(children: [
-          _heading(context, 'Styles'),
-          const Spacer(),
-          PopupMenuButton<String>(
-            tooltip: 'My Styles',
-            icon: const Icon(Icons.settings_outlined, size: 18),
-            iconSize: 18,
-            padding: EdgeInsets.zero,
-            onSelected: (v) => v == 'save' ? host.saveCurrentStyle() : host.clearSavedStyles(),
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'save', height: 32, child: Text('Save Current Style', style: TextStyle(fontSize: 13))),
-              PopupMenuItem(value: 'clear', height: 32, child: Text('Clear My Styles for ${_title.replaceAll(' Tool', '')}', style: const TextStyle(fontSize: 13))),
-            ],
-          ),
-        ]),
-      ]);
+      kids.add(_heading(context, 'Styles', small: true));
       // The built-in styles in the current color, then My Styles (your own saved looks) right below
       final current = QuickStyle(host.color.toARGB32() & 0xFFFFFF, host.size,
           host.styleKind != null ? host.currentArrowStyle : ArrowStyle.arrow);
@@ -142,7 +149,6 @@ class PropertiesPanel extends StatelessWidget {
       kids.add(_separator(context));
     }
 
-    kids.add(_heading(context, _title));
     if (!_usesColor) {
       kids.add(_note(context, _hint));
       if (host.tool == Tool.grabText) {
@@ -284,16 +290,21 @@ class PropertiesPanel extends StatelessWidget {
       }
     }
 
+    // A floating card that hugs its content (and scrolls when the window is shorter than it)
     return Container(
       width: width,
-      decoration: BoxDecoration(
-        color: t.colorScheme.surfaceContainerLow,
-        border: Border(left: BorderSide(color: t.colorScheme.outlineVariant.withValues(alpha: 0.6))),
-      ),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          for (final k in kids) Padding(padding: const EdgeInsets.only(bottom: 6), child: k),
+      decoration: SnapChrome.of(context).decoration(),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                for (final k in kids) Padding(padding: const EdgeInsets.only(bottom: 6), child: k),
+              ]),
+            ),
+          ),
         ]),
       ),
     );
@@ -397,9 +408,12 @@ class PropertiesPanel extends StatelessWidget {
 
   static Widget _heading(BuildContext context, String text, {bool small = false}) {
     final s = Theme.of(context).colorScheme;
-    return Text(small ? text.toUpperCase() : text,
-        style: TextStyle(fontSize: small ? 10.5 : 13, fontWeight: FontWeight.w600, letterSpacing: small ? 0.6 : 0,
-            color: small ? s.onSurfaceVariant : s.onSurface));
+    return Padding(
+      padding: EdgeInsets.only(top: small ? 2 : 0),
+      child: Text(small ? text.toUpperCase() : text,
+          style: TextStyle(fontSize: small ? 10.5 : 13.5, fontWeight: FontWeight.w600, letterSpacing: small ? 0.6 : -0.2,
+              color: small ? s.onSurfaceVariant : s.onSurface)),
+    );
   }
 
   static Widget _note(BuildContext context, String text) =>
@@ -411,7 +425,7 @@ class PropertiesPanel extends StatelessWidget {
       ]);
 
   static Widget _separator(BuildContext context) =>
-      Divider(height: 8, thickness: 1, color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.6));
+      Divider(height: 10, thickness: 1, color: Theme.of(context).colorScheme.outlineVariant);
 
   static Widget _check(BuildContext context, String label, bool value, ValueChanged<bool> onChanged, {bool indent = true}) => InkWell(
         borderRadius: BorderRadius.circular(6),
@@ -453,11 +467,7 @@ class _Dropdown<T> extends StatelessWidget {
         width: width,
         height: 28,
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        decoration: BoxDecoration(
-          color: s.surface,
-          borderRadius: BorderRadius.circular(7),
-          border: Border.all(color: s.outlineVariant),
-        ),
+        decoration: SnapChrome.of(context).controlBox(),
         child: Row(children: [
           Expanded(child: entry(current)),
           Icon(Icons.unfold_more, size: 14, color: s.onSurfaceVariant),
@@ -479,10 +489,10 @@ class _Segmented<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final s = Theme.of(context).colorScheme;
+    final chrome = SnapChrome.of(context);
     return Container(
       padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(color: s.surfaceContainerHighest, borderRadius: BorderRadius.circular(8)),
+      decoration: chrome.controlBox(radius: 8),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         for (final v in values)
           Tooltip(
@@ -494,9 +504,9 @@ class _Segmented<T> extends StatelessWidget {
                 width: 42, height: 24,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: v == selected ? s.surface : Colors.transparent,
+                  color: v == selected ? chrome.raised : Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
-                  boxShadow: v == selected ? const [BoxShadow(color: Color(0x22000000), blurRadius: 2, offset: Offset(0, 1))] : null,
+                  boxShadow: v == selected ? const [BoxShadow(color: Color(0x26000000), blurRadius: 2, offset: Offset(0, 1))] : null,
                 ),
                 child: glyph?.call(v) ??
                     Text(label(v), style: TextStyle(fontSize: 12, fontWeight: v == selected ? FontWeight.w600 : FontWeight.w400)),
@@ -517,7 +527,6 @@ class TextFormatBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final f = host.textFormat;
-    final scheme = Theme.of(context).colorScheme;
     final sizePt = f.points ?? host.size.fontSize;
     Widget gap([double w = 4]) => SizedBox(width: w);
     final chars = host.selectedChars;
@@ -530,15 +539,12 @@ class TextFormatBar extends StatelessWidget {
     CharStyle withItalic(CharStyle c, bool v) => (color: c.color, bold: c.bold, italic: v, underline: c.underline);
     CharStyle withUnderline(CharStyle c, bool v) => (color: c.color, bold: c.bold, italic: c.italic, underline: v);
     CharStyle withColor(CharStyle c, Color? v) => (color: v, bold: c.bold, italic: c.italic, underline: c.underline);
-    return Material(
-      color: scheme.surface,
-      elevation: 6,
-      shadowColor: Colors.black38,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        width: width,
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: scheme.outlineVariant)),
+    return Container(
+      width: width,
+      padding: const EdgeInsets.all(8),
+      decoration: SnapChrome.of(context).decoration(radius: 12),
+      child: Material(
+        type: MaterialType.transparency,
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             _Dropdown<String>(
@@ -646,9 +652,9 @@ class _Toggle extends StatelessWidget {
         child: Container(
           width: 30, height: 28,
           decoration: BoxDecoration(
-            color: on ? s.primary.withValues(alpha: 0.16) : s.surface,
+            color: on ? s.primary.withValues(alpha: 0.16) : SnapChrome.of(context).control,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: on ? s.primary : s.outlineVariant),
+            border: Border.all(color: on ? s.primary : SnapChrome.of(context).controlBorder, width: 0.8),
           ),
           child: Icon(icon, size: 17, color: on ? s.primary : s.onSurfaceVariant),
         ),
@@ -691,7 +697,7 @@ class _StepperState extends State<_Stepper> {
         );
     return Container(
       height: 28,
-      decoration: BoxDecoration(color: s.surface, borderRadius: BorderRadius.circular(7), border: Border.all(color: s.outlineVariant)),
+      decoration: SnapChrome.of(context).controlBox(),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         btn(Icons.remove, -2),
         SizedBox(
@@ -728,11 +734,31 @@ class _PillButton extends StatelessWidget {
       style: TextButton.styleFrom(
         visualDensity: VisualDensity.compact,
         padding: const EdgeInsets.symmetric(horizontal: 10),
-        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.7),
+        foregroundColor: Theme.of(context).colorScheme.onSurface,
+        backgroundColor: SnapChrome.of(context).control,
+        side: BorderSide(color: SnapChrome.of(context).controlBorder, width: 0.8),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(7)),
       ),
     );
   }
+}
+
+/// A small flat icon button (the card's close button).
+class _IconTap extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+  const _IconTap({required this.icon, required this.tooltip, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(6),
+          child: SizedBox(width: 24, height: 24, child: Icon(icon, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ),
+      );
 }
 
 /// A Quick Style tile, drawn with the real renderer (arrows point down-left), as in the Swift app.
