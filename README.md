@@ -368,15 +368,17 @@ install Flutter and run `flutter build windows` or `flutter build linux`.
 
 Each run's builds can be downloaded from its page under [Actions](https://github.com/msafarulla/snapnow/actions).
 
-**Publishing a release** takes a version tag. Bump `version:` in `pubspec.yaml`, commit, then:
+**Publishing a release** takes a version tag. Bump `version:` in `pubspec.yaml`, commit, push, then:
 
 ```sh
-git tag -a v1.13.0 -m "SnapNow 1.13.0"
-git push origin v1.13.0
+tools/release.sh
 ```
 
-The same workflow builds all three platforms and, only if every job passes, publishes them as a
+That tags the commit with the pubspec version, pushes the tag and follows the build. The same workflow
+builds all three platforms and, only if every job passes, publishes them as a
 [GitHub Release](https://github.com/msafarulla/snapnow/releases) with notes generated from the commits.
+The release appears only once the builds are attached, so don't create it by hand before the build finishes
+(a release that exists before its builds stays empty and downloads fail).
 
 ## Roadmap
 

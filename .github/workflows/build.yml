@@ -111,9 +111,18 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           merge-multiple: true
+      # The release goes live only once every build is attached: it is created as a draft with the assets,
+      # then published, so "releases/latest" (the app's update check) never points at an empty release.
+      # A release that already exists for the tag (made by hand) just gets the assets added.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "SnapNow ${GITHUB_REF_NAME#v}" \
-            --generate-notes SnapNow-macOS.zip SnapNow-Windows.zip SnapNow-Linux-x64.tar.gz
+          assets=(SnapNow-macOS.zip SnapNow-Windows.zip SnapNow-Linux-x64.tar.gz)
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "SnapNow ${GITHUB_REF_NAME#v}" \
+              --generate-notes --draft "${assets[@]}"
+            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+          fi
