@@ -24,8 +24,11 @@ class CanvasPainter extends CustomPainter {
   /// For the build-up GIF: spinning Fourier circles trace lines, pen strokes and outlines as they draw on.
   final bool epicycles;
 
+  /// [animate] makes the painter repaint on every [march] tick: only wanted when a committed annotation
+  /// actually marches, so the editor's cached picture layer isn't re-rasterised 25× a second for nothing.
   CanvasPainter({required this.state, required this.selectionId, required this.scale, this.scaleY, this.hiddenTextId,
-      this.progress, this.march, this.epicycles = false});
+      this.progress, this.march, this.epicycles = false, bool animate = false})
+      : super(repaint: animate ? march : null);
 
   double get _sy => scaleY ?? scale; // vertical scale, == scale unless a non-proportional editor resize set it
 
@@ -33,6 +36,15 @@ class CanvasPainter extends CustomPainter {
 
   /// [march] for the paint in progress (the static draw helpers read it), 0 outside one.
   static double _marchNow = 0;
+
+  /// Runs [draw] with this painter's [march] phase in force, so static draw helpers called from another
+  /// painter (the editor's overlay drawing a live stroke) march in step with the picture underneath.
+  void withMarch(void Function() draw) {
+    final outer = _marchNow; // restored after, so a paint inside another paint can't leak its phase
+    _marchNow = march?.value ?? 0;
+    draw();
+    _marchNow = outer;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -858,8 +870,8 @@ class CanvasPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CanvasPainter old) =>
-      old.state != state || old.selectionId != selectionId || old.scale != scale || old.progress != progress ||
-      old.march != march;
+      old.state != state || old.selectionId != selectionId || old.scale != scale || old.scaleY != scaleY ||
+      old.hiddenTextId != hiddenTextId || old.progress != progress || old.march != march || old.epicycles != epicycles;
 }
 
 /// The kinds of handle on a selected arrow or line.

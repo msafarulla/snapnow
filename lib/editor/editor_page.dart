@@ -2429,7 +2429,22 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                     onPointerSignal: _onPointerSignal,
                     onPointerPanZoomStart: _onPanZoomStart,
                     onPointerPanZoomUpdate: _onPanZoomUpdate,
-                    child: CustomPaint(
+                    child: Stack(children: [
+                      // The picture with its committed annotations, rasterised once and kept (RepaintBoundary)
+                      // until the state, zoom or an animation changes it. Pointer moves, live previews, handles
+                      // and marching ants only redraw the overlay on top, which matters on a big display where the
+                      // picture is tens of megapixels and blur patches and shadows are costly to re-render.
+                      Positioned(
+                        left: origin.dx, top: origin.dy, width: fitted.width, height: fitted.height,
+                        child: ClipRect(child: RepaintBoundary(child: CustomPaint(
+                          isComplex: true,
+                          painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY,
+                              hiddenTextId: _textEdit?.id, march: _march, epicycles: _fourierId != null,
+                              animate: state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches),
+                              progress: _fourierId == null ? null : {for (final a in state.annotations) a.id: a.id == _fourierId ? _fourierT : 1.0}),
+                        ))),
+                      ),
+                      Positioned.fill(child: CustomPaint(
                       painter: _PreviewPainter(
                         base: CanvasPainter(state: state, selectionId: _fourierId == null ? _selection : null, scale: scale, scaleY: scaleY,
                             hiddenTextId: _textEdit?.id, march: _march, epicycles: _fourierId != null,
@@ -2450,7 +2465,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                         groupBoxes: _selection != null && _group.isNotEmpty ? _groupBoxes() : null,
                         cropRect: _cropRect,
                       ),
-                    ),
+                      )),
+                    ]),
                   ),
                 ),
               ),
@@ -3223,17 +3239,16 @@ class _PreviewPainter extends CustomPainter {
 
   static const _accent = Color(0xFF2F7CF6);
 
+  // The picture itself is the cached layer underneath (see the editor's canvas Stack): this paints only what
+  // moves — the selection's handles, the stroke being drawn, guides, ants, crop and canvas-resize chrome.
   @override
-  void paint(Canvas canvas, Size size) {
+  void paint(Canvas canvas, Size size) => base.withMarch(() => _paintOverlay(canvas));
+
+  void _paintOverlay(Canvas canvas) {
     canvas.save();
     canvas.translate(origin.dx, origin.dy);
     final sy = scaleY ?? scale;
-    final imageSize = Size(base.state.image.width * scale, base.state.image.height * sy);
-    canvas.save();
-    canvas.clipRect(Offset.zero & imageSize, doAntiAlias: false); // annotations stay on the image
-    base.paint(canvas, imageSize);
-    canvas.restore();
-    base.paintSelection(canvas); // handles may sit on the edge, so outside the clip
+    base.paintSelection(canvas); // handles may sit on the image's edge, so not clipped to it
 
     canvas.save();
     canvas.scale(scale, sy);
@@ -3302,7 +3317,7 @@ class _PreviewPainter extends CustomPainter {
       canvas.drawLine(g.vertical ? Offset(at, from) : Offset(from, at), g.vertical ? Offset(at, to) : Offset(to, at), guide);
     }
 
-    final frame = Offset.zero & imageSize;
+    final frame = Offset.zero & Size(base.state.image.width * scale, base.state.image.height * sy);
     final resize = canvasResize;
     if (resize != null) {
       final target = Rect.fromLTRB(resize.left * scale, resize.top * scale, resize.right * scale, resize.bottom * scale);
