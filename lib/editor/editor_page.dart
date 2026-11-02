@@ -150,6 +150,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });
     Native.getBool('pinOnTop').then((on) { if (on == true && !_pinTouched) _setPinned(true, save: false); });
     Native.getBool('inspector.hidden').then((hidden) { if (mounted && hidden == true) setState(() => _inspectorShown = false); });
+    Native.getString('callout.style').then((v) {
+      final s = CalloutStyle.values.where((s) => s.name == v).firstOrNull;
+      if (mounted && s != null) setState(() => _calloutStyle = s);
+    });
     Native.getString('step.style').then((v) {
       final s = StepMarker.values.where((s) => s.name == v).firstOrNull;
       if (mounted && s != null) setState(() => _stepMarker = s);
@@ -868,9 +872,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   /// Dragging an annotation's body. A callout's bubble moves on its own, leaving the pointer tip anchored on
   /// what it points at; Option-drag (Alt on Windows/Linux) moves the whole callout.
   Annotation _moved(Annotation a, Offset d) {
-    if (a.shape case CalloutShape(:final string, :final at, :final tail?, :final runs)
-        when !HardwareKeyboard.instance.isAltPressed) {
-      return a.copyWith(shape: CalloutShape(string, at + d, tail: tail, runs: runs));
+    if (a.shape case CalloutShape(:final at, tail: _?) && final c when !HardwareKeyboard.instance.isAltPressed) {
+      return a.copyWith(shape: c.copyWith(at: at + d));
     }
     return a.movedBy(d);
   }
@@ -1005,8 +1008,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   Annotation _resized(Annotation a, int handle, Offset p) {
     switch (a.shape) {
-      case CalloutShape(:final string, :final at):
-        return a.copyWith(shape: CalloutShape(string, at, tail: _clamp(p)));
+      case CalloutShape() && final c:
+        return a.copyWith(shape: c.copyWith(tail: () => _clamp(p)));
       // Ends and bend points move; a tangent handle steers the curve through its point (both sides together)
       case ArrowShape() || LineShape():
         final grips = CanvasPainter.curveGrips(a);
@@ -1053,7 +1056,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   /// Typing starts in the bubble straight away.
   void _addCallout(Offset tip, Offset? boxCenter) {
     final fs = _size.fontSize * _density;
-    final probe = Annotation(id: -1, shape: const StepShape(Offset.zero), size: _size, scale: _density,
+    final probe = Annotation(id: -1, shape: CalloutShape('', Offset.zero, style: _calloutStyle), size: _size, scale: _density,
         textFormat: _formatFor('callout'));
     final r = CanvasPainter.calloutRect(CanvasPainter.typeHint, Offset.zero, probe); // placed for a few words of text
     Offset at;
@@ -1072,15 +1075,15 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       at += Offset(dx, dy);
     }
     final before = _state!;
-    final a = Annotation(id: _nextId++, scale: _density, shape: CalloutShape('', at, tail: tip), color: _color, size: _size,
-        textFormat: _formatFor('callout'));
+    final a = Annotation(id: _nextId++, scale: _density, shape: CalloutShape('', at, tail: tip, style: _calloutStyle),
+        color: _color, size: _size, textFormat: _formatFor('callout'));
     setState(() => _state = before.copyWith(annotations: [...before.annotations, a]));
     _beginTextEdit(a, before: before, isNew: true);
   }
 
   static Shape _withText(Shape s, String text, List<TextRun> runs) => switch (s) {
         TextShape(:final at) => TextShape(text, at, runs: runs),
-        CalloutShape(:final at, :final tail) => CalloutShape(text, at, tail: tail, runs: runs),
+        CalloutShape() && final c => c.copyWith(string: text, runs: runs),
         _ => s,
       };
 
@@ -1147,6 +1150,27 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   void _addStep(Offset p) {
     _add(Annotation(id: _nextId++, scale: _density, shape: StepShape(p, style: _stepMarker), color: _color, size: _size));
+  }
+
+  /// The bubble new callouts get (remembered as `callout.style`); a selected callout shows its own.
+  CalloutStyle _calloutStyle = CalloutStyle.rounded;
+
+  @override
+  CalloutStyle? get calloutStyle {
+    final a = selected;
+    if (a != null) return a.shape is CalloutShape ? (a.shape as CalloutShape).style : null;
+    return _tool == Tool.callout ? _calloutStyle : null;
+  }
+
+  /// Picks the bubble for new callouts; a selected callout changes to it (the text stays where it is).
+  @override
+  void pickCalloutStyle(CalloutStyle s) {
+    setState(() => _calloutStyle = s);
+    Native.setString('callout.style', s.name);
+    final a = selected;
+    if (a != null && a.shape is CalloutShape) {
+      _replace(a.copyWith(shape: (a.shape as CalloutShape).copyWith(style: s)));
+    }
   }
 
   /// The marker shape new steps get (remembered as `step.style`); a selected step shows its own.

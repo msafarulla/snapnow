@@ -13,6 +13,7 @@ import 'package:snaplite_flutter/model/annotation.dart';
 /// Loads a real system font so text is readable instead of Ahem boxes. Skipped without the variable.
 void main() {
   renderMarkers();
+  renderBubbles();
   final outDir = Platform.environment['SNAPNOW_LOOK_DIR'];
 
   testWidgets('render the editor look', (tester) async {
@@ -93,5 +94,25 @@ void renderMarkers() {
     final img = await rec.endRecording().toImage(480, 140);
     final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
     File('$outDir/markers.png').writeAsBytesSync(bytes!.buffer.asUint8List());
+  });
+}
+
+/// All five callout bubbles side by side, each pointing down-left (same SNAPNOW_LOOK_DIR).
+void renderBubbles() {
+  final outDir = Platform.environment['SNAPNOW_LOOK_DIR'];
+  test('render the callout bubbles', () async {
+    if (outDir == null) return;
+    final rec = ui.PictureRecorder();
+    final canvas = Canvas(rec);
+    canvas.drawRect(const Rect.fromLTWH(0, 0, 900, 200), Paint()..color = Colors.white);
+    for (final (i, s) in CalloutStyle.values.indexed) {
+      final at = Offset(60 + i * 175.0, 50);
+      final a = Annotation(id: i + 1, shape: CalloutShape('Hello there', at, tail: at + const Offset(-30, 110), style: s),
+          color: const Color(0xFF2F7CF6), size: StrokeSize.large);
+      CanvasPainter.drawAnnotation(canvas, a);
+    }
+    final img = await rec.endRecording().toImage(900, 200);
+    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    File('$outDir/bubbles.png').writeAsBytesSync(bytes!.buffer.asUint8List());
   });
 }

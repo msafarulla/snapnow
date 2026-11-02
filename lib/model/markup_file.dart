@@ -130,9 +130,9 @@ class MarkupFile {
       PenShape(:final points) => {'kind': 'pen', 'points': [for (final q in points) _pt(q)]},
       TextShape(:final string, :final at, :final runs) =>
         {'kind': 'text', 'string': string, 'at': _pt(at), 'runs': [for (final r in runs) _run(r)]},
-      CalloutShape(:final string, :final at, :final tail, :final runs) =>
+      CalloutShape(:final string, :final at, :final tail, :final runs, :final style) =>
         {'kind': 'callout', 'string': string, 'at': _pt(at), 'tail': tail == null ? null : _pt(tail),
-          'runs': [for (final r in runs) _run(r)]},
+          'runs': [for (final r in runs) _run(r)], 'style': style.name},
       StepShape(:final center, :final style) => {'kind': 'step', 'center': _pt(center), 'style': style.name},
       ImageShape(:final rect, :final image) => {'kind': 'image', 'rect': _rc(rect), 'image': (images..add(await _png(image))).length - 1},
     };
@@ -167,7 +167,8 @@ class MarkupFile {
       'pen' => PenShape(pts(j['points'])),
       'text' => TextShape(j['string'] as String, _offset(j['at']), runs: _runs(j['runs'])),
       'callout' => CalloutShape(j['string'] as String, _offset(j['at']),
-          tail: j['tail'] == null ? null : _offset(j['tail']), runs: _runs(j['runs'])),
+          tail: j['tail'] == null ? null : _offset(j['tail']), runs: _runs(j['runs']),
+          style: CalloutStyle.values.where((s) => s.name == j['style']).firstOrNull ?? CalloutStyle.rounded),
       'step' => StepShape(_offset(j['center']), style: _stepMarker(j['style'])),
       'image' => ImageShape(_rect(j['rect']), await image(j['image'])),
       _ => throw const FormatException(),

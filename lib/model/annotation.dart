@@ -357,12 +357,24 @@ class TextShape extends Shape {
 
 /// A speech bubble: text at `at` (top-left of the text) and a pointer whose tip is at `tail`
 /// (null: no pointer, e.g. callouts made before pointers existed).
+/// The bubble a Callout's text sits in.
+enum CalloutStyle {
+  rounded, square, pill, ellipse, cloud;
+
+  String get label => const ['Rounded', 'Square', 'Pill', 'Ellipse', 'Thought cloud'][index];
+}
+
 class CalloutShape extends Shape {
   final String string;
   final Offset at;
   final Offset? tail;
   final List<TextRun> runs; // formatting on highlighted words
-  const CalloutShape(this.string, this.at, {this.tail, this.runs = const []});
+  final CalloutStyle style;
+  const CalloutShape(this.string, this.at, {this.tail, this.runs = const [], this.style = CalloutStyle.rounded});
+
+  CalloutShape copyWith({String? string, Offset? at, Offset? Function()? tail, List<TextRun>? runs, CalloutStyle? style}) =>
+      CalloutShape(string ?? this.string, at ?? this.at,
+          tail: tail != null ? tail() : this.tail, runs: runs ?? this.runs, style: style ?? this.style);
 }
 
 /// The marker a Step number sits in.
@@ -506,8 +518,8 @@ class Annotation {
         LineShape(from + d, to + d, points: [for (final p in points) p + d], tangents: tangents),
       PenShape(:final points) => PenShape([for (final p in points) p + d]),
       TextShape(:final string, :final at, :final runs) => TextShape(string, at + d, runs: runs),
-      CalloutShape(:final string, :final at, :final tail, :final runs) =>
-        CalloutShape(string, at + d, tail: tail == null ? null : tail + d, runs: runs),
+      CalloutShape(:final at, :final tail) && final c =>
+        c.copyWith(at: at + d, tail: () => tail == null ? null : tail + d),
       StepShape(:final center, :final style) => StepShape(center + d, style: style),
       _ => (rect != null) ? null : shape,
     };
@@ -529,8 +541,8 @@ class Annotation {
             tangents: [for (final t in tangents) t == null ? null : sc(t)]),
       PenShape(:final points) => PenShape([for (final p in points) sc(p)]),
       TextShape(:final string, :final at, :final runs) => TextShape(string, sc(at), runs: runs),
-      CalloutShape(:final string, :final at, :final tail, :final runs) =>
-        CalloutShape(string, sc(at), tail: tail == null ? null : sc(tail), runs: runs),
+      CalloutShape(:final at, :final tail) && final c =>
+        c.copyWith(at: sc(at), tail: () => tail == null ? null : sc(tail)),
       StepShape(:final center, :final style) => StepShape(sc(center), style: style),
       RectShape(:final rect) => RectShape(scr(rect)),
       EllipseShape(:final rect) => EllipseShape(scr(rect)),

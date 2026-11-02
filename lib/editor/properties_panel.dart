@@ -28,6 +28,8 @@ abstract class PanelHost {
   void pickShapeKind(ShapeKind k);
   StepMarker? get stepMarker; // a step's marker (selected, or the Step tool's choice); null otherwise
   void pickStepMarker(StepMarker s);
+  CalloutStyle? get calloutStyle; // a callout's bubble (selected, or the Callout tool's choice); null otherwise
+  void pickCalloutStyle(CalloutStyle s);
   void pickColor(Color c);
   void openColorPanel();
   void pickSize(StrokeSize s);
@@ -169,6 +171,20 @@ class PropertiesPanel extends StatelessWidget {
               glyph: (k) => CustomPaint(size: const Size(16, 14), painter: _ShapeGlyph(k, Theme.of(context).colorScheme.onSurface)),
               tooltip: (k) => k.label,
               onTap: host.pickShapeKind,
+            ),
+          ]),
+        ],
+        if (host.calloutStyle case final bubble?) ...[
+          const SizedBox(height: 4),
+          _row(context, 'Bubble', [
+            _Segmented<CalloutStyle>(
+              values: CalloutStyle.values,
+              selected: bubble,
+              itemWidth: 38,
+              label: (s) => s.label,
+              glyph: (s) => CustomPaint(size: const Size(24, 18), painter: _CalloutGlyph(s, Theme.of(context).colorScheme.onSurface)),
+              tooltip: (s) => s.label,
+              onTap: host.pickCalloutStyle,
             ),
           ]),
         ],
@@ -858,6 +874,23 @@ class _ShapeGlyph extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ShapeGlyph old) => old.kind != kind || old.color != color;
+}
+
+/// A small outline of a callout bubble (with its pointer) for the Bubble picker.
+class _CalloutGlyph extends CustomPainter {
+  final CalloutStyle style;
+  final Color color;
+  _CalloutGlyph(this.style, this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final box = Rect.fromLTWH(2, 1, size.width - 4, size.height * 0.68);
+    final path = CanvasPainter.calloutPath(box, Offset(size.width * 0.3, size.height - 0.5), 7, style: style);
+    canvas.drawPath(path, Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 1.2..strokeJoin = StrokeJoin.round);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CalloutGlyph old) => old.style != style || old.color != color;
 }
 
 /// A small outline of a step marker for the Marker picker.

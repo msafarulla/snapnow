@@ -600,18 +600,22 @@ class CanvasPainter extends CustomPainter {
   /// A callout's text colour: the chosen one, or black/white for contrast with the bubble.
   static Color calloutTextColor(Annotation a) => a.textFormat.textColor ?? contrast(a.color);
 
-  /// `at` is the text's top-left corner; the box adds padding around it.
+  static CalloutStyle calloutStyleOf(Annotation a) => a.shape is CalloutShape ? (a.shape as CalloutShape).style : CalloutStyle.rounded;
+
+  /// `at` is the text's top-left corner; the box adds padding around it (more for an ellipse or a cloud,
+  /// whose curves cut into the corners).
   static Rect calloutRect(String string, Offset at, Annotation a) {
     final tp = textLayout(string, a, Colors.black);
     final fontSize = a.fontSize;
-    final padX = fontSize * 0.5, padY = fontSize * 0.3;
+    final roomy = switch (calloutStyleOf(a)) { CalloutStyle.ellipse => true, CalloutStyle.cloud => true, _ => false };
+    final padX = fontSize * (roomy ? 1.1 : 0.5), padY = fontSize * (roomy ? 0.7 : 0.3);
     return Rect.fromLTWH(at.dx - padX, at.dy - padY, tp.width + padX * 2, tp.height + padY * 2);
   }
 
   /// While typing (`hideText`) an empty bubble is sized for the "Type here" hint.
   static void _callout(Canvas canvas, String string, Offset at, Offset? tail, Annotation a, {bool hideText = false}) {
     final shown = string.isEmpty && hideText ? typeHint : string;
-    final bubble = calloutPath(calloutRect(shown, at, a), tail, a.fontSize);
+    final bubble = calloutPath(calloutRect(shown, at, a), tail, a.fontSize, style: calloutStyleOf(a));
     canvas.drawPath(bubble.shift(const Offset(0, 1)), Paint()
       ..color = Colors.black.withValues(alpha: 0.3)
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2));
@@ -621,14 +625,40 @@ class CanvasPainter extends CustomPainter {
 
   static const typeHint = 'Type here';
 
-  /// The bubble outline: a rounded box plus a pointer from the box edge facing `tail` to the tail tip.
-  static Path calloutPath(Rect box, Offset? tail, double fontSize) {
-    final radius = fontSize * 0.35;
-    final body = Path()..addRRect(RRect.fromRectXY(box, radius, radius));
+  /// The bubble outline: the body in the given style plus a pointer from the body's edge facing `tail` to
+  /// the tail tip (a thought cloud gets a trail of shrinking puffs instead).
+  static Path calloutPath(Rect box, Offset? tail, double fontSize, {CalloutStyle style = CalloutStyle.rounded}) {
+    final radius = switch (style) {
+      CalloutStyle.square => 0.0,
+      CalloutStyle.pill => math.min(box.width, box.height) / 2,
+      _ => fontSize * 0.35,
+    };
+    final body = switch (style) {
+      CalloutStyle.ellipse => Path()..addOval(box),
+      CalloutStyle.cloud => _cloud(box, fontSize),
+      _ => Path()..addRRect(RRect.fromRectXY(box, radius, radius)),
+    };
     if (tail == null || box.inflate(2).contains(tail)) return body;
     final c = box.center, d = tail - c;
     final halfW = box.width / 2, halfH = box.height / 2;
     final base = math.min(fontSize * 0.9, math.min(box.width, box.height) * 0.6); // pointer width at the box
+    if (style == CalloutStyle.cloud) {
+      // Puffs from just outside the cloud toward the tip, each smaller than the last
+      final edge = _ellipseEdge(box, d) ;
+      var path = body;
+      for (final (f, r) in [(0.3, base * 0.42), (0.62, base * 0.3), (0.88, base * 0.19)]) {
+        path = Path.combine(PathOperation.union, path, Path()..addOval(Rect.fromCircle(center: Offset.lerp(edge, tail, f)!, radius: r)));
+      }
+      return path;
+    }
+    if (style == CalloutStyle.ellipse) {
+      // The pointer's foot straddles the point where the line to the tip leaves the oval
+      final t = math.atan2(d.dy / halfH, d.dx / halfW);
+      final spread = base / (halfW + halfH); // radians either side, so the foot is about `base` wide
+      Offset on(double ang) => Offset(c.dx + halfW * math.cos(ang) * 0.98, c.dy + halfH * math.sin(ang) * 0.98);
+      final pointer = Path()..addPolygon([on(t - spread), tail, on(t + spread)], true);
+      return Path.combine(PathOperation.union, body, pointer);
+    }
     final List<Offset> foot;
     if (d.dy.abs() * halfW >= d.dx.abs() * halfH) {
       // Leaves through the top or bottom edge
@@ -647,6 +677,35 @@ class CanvasPainter extends CustomPainter {
 
   /// Like clamp, but a box too small for the pointer's margins (lo > hi) gives the middle instead of throwing.
   static double _within(double v, double lo, double hi) => lo <= hi ? v.clamp(lo, hi) : (lo + hi) / 2;
+
+  /// Where a ray from the box centre in direction `d` crosses the box's inscribed ellipse.
+  static Offset _ellipseEdge(Rect box, Offset d) {
+    final c = box.center, halfW = box.width / 2, halfH = box.height / 2;
+    final t = math.atan2(d.dy / halfH, d.dx / halfW);
+    return Offset(c.dx + halfW * math.cos(t), c.dy + halfH * math.sin(t));
+  }
+
+  /// A thought cloud: the box with a ring of puffs (circles) around its edge.
+  static Path _cloud(Rect box, double fontSize) {
+    final r = math.min(fontSize * 0.75, math.min(box.width, box.height) * 0.45);
+    final inner = box.deflate(r * 0.55);
+    var path = Path()..addRRect(RRect.fromRectXY(inner, r, r));
+    void puff(Offset c) => path = Path.combine(PathOperation.union, path, Path()..addOval(Rect.fromCircle(center: c, radius: r)));
+    // Puffs along each edge of the inner box, spaced so neighbours overlap
+    final step = r * 1.25;
+    final nx = math.max(1, (inner.width / step).round()), ny = math.max(1, (inner.height / step).round());
+    for (var i = 0; i <= nx; i++) {
+      final x = inner.left + inner.width * i / nx;
+      puff(Offset(x, inner.top));
+      puff(Offset(x, inner.bottom));
+    }
+    for (var i = 1; i < ny; i++) {
+      final y = inner.top + inner.height * i / ny;
+      puff(Offset(inner.left, y));
+      puff(Offset(inner.right, y));
+    }
+    return path;
+  }
 
   /// The outline of a step marker of [style] whose number is centred at [center]; [d] is the step diameter.
   /// Every style covers about the same area as the circle, so the number stays the same size.
