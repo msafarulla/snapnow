@@ -2859,10 +2859,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       for (final t in _toolOrder) if (!_visibleTools.contains(t)) (t.name, _toolInfo[t]!.$1, _toolInfo[t]!.$2),
       ('overlay', Icons.add_photo_alternate_outlined, 'Image'),
       ('logo', Icons.business_outlined, 'Logo'),
-      // On macOS Excalidraw lives in File (New Excalidraw Drawing / Open in Excalidraw…), like Manim
+      ('excalidraw', Icons.dashboard_outlined, 'Excalidraw'), // this picture into the whiteboard
+      // A blank whiteboard is File › New Excalidraw Drawing on macOS, like Manim
       if (!Platform.isMacOS) ...[
-        ('whiteboard', Icons.dashboard_outlined, 'Excalidraw'),
-        ('excalidraw', Icons.open_in_new, 'Open in Excalidraw…'),
+        ('whiteboard', Icons.draw_outlined, 'New Excalidraw Drawing'),
         ('open', Icons.folder_open_outlined, 'Open Image…'),
         ('flatten', Icons.layers_clear_outlined, 'Flatten All'),
         ('export', Icons.ios_share, 'Save As…'),
