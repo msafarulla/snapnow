@@ -120,6 +120,8 @@ class AppMenuBar extends StatelessWidget {
             if (!editing) item('Open Selected', () => grid('openSelected')),
           ]),
           ?group([
+            // While editing, the drawing lands on the canvas; from the Library it becomes a new capture
+            item('New Excalidraw Drawing', () => editing ? ed('whiteboard') : AppController.instance.newDrawing(library.context)),
             item('New Manim Video', () => ManimStudioPage.open(library.context)),
             item('Open Manim Project…', () => ManimStudioPage.pickAndOpen(library.context)),
           ]),
@@ -129,6 +131,7 @@ class AppMenuBar extends StatelessWidget {
               item('Save', () => ed('save'), cmd(LogicalKeyboardKey.keyS)),
               item('Save As…', () => ed('saveAs'), cmd(LogicalKeyboardKey.keyS, shift: true)),
               item('Save as Animated GIF…', () => ed('saveGif')),
+              item('Open in Excalidraw…', () => ed('excalidraw')),
               item('Open in Manim Studio…', () => ed('manim')),
             ],
           ]),

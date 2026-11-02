@@ -1,9 +1,10 @@
 import 'dart:io';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import '../editor/editor_page.dart';
+import '../excalidraw/excalidraw_page.dart';
 import '../library/library_page.dart';
 import '../platform/hotkeys.dart';
 import '../platform/native.dart';
@@ -103,6 +104,21 @@ class AppController with TrayListener, WindowListener {
     await _show();
     _closePushedPages();
     await libraryKey.currentState?.showGrid();
+  }
+
+  /// File › New Excalidraw Drawing from the Library: a blank whiteboard; "Send to SnapNow" saves the drawing
+  /// as a new capture and opens it in the editor. (While editing, the editor's own whiteboard drops the
+  /// drawing onto the canvas instead.)
+  Future<void> newDrawing(BuildContext context) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (_) => ExcalidrawPage(onExport: (png) async {
+        final path = newCapturePath(prefix: 'SnapNow Drawing');
+        await File(path).writeAsBytes(png, flush: true);
+        capturesVersion.value++;
+        await openEditor(path);
+      }),
+    ));
   }
 
   /// Manim Studio is a page pushed over the Library; a new capture or the Library
