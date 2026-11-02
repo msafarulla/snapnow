@@ -359,14 +359,29 @@ class LibraryPageState extends State<LibraryPage> {
           child: Container(
             decoration: SnapChrome.of(context).decoration(),
             clipBehavior: Clip.antiAlias,
-            child: ListView.separated(
-              controller: _filmScroll,
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              itemCount: _files.length,
-              separatorBuilder: (_, __) => const SizedBox(width: _filmGap),
-              itemBuilder: (context, i) => _filmTile(_files[i].path),
-            ),
+            child: Row(children: [
+              // Fixed at the left end: send the picture being edited to Excalidraw
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: ToolbarButton(
+                  icon: Icons.dashboard_outlined,
+                  label: 'Excalidraw',
+                  tooltip: 'Open this picture in Excalidraw',
+                  onTap: () => _editor?.runMenu('excalidraw'),
+                ),
+              ),
+              Container(width: 1, height: _filmHeight - 28, color: Theme.of(context).colorScheme.outlineVariant),
+              Expanded(
+                child: ListView.separated(
+                  controller: _filmScroll,
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  itemCount: _files.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: _filmGap),
+                  itemBuilder: (context, i) => _filmTile(_files[i].path),
+                ),
+              ),
+            ]),
           ),
         ),
       ]),
