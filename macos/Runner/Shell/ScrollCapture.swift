@@ -729,8 +729,26 @@ enum ScrollCapture {
             panel.contentView = view
             panel.makeKeyAndOrderFront(nil)
             panel.makeFirstResponder(view)
+            if !panel.isKeyWindow {
+                // Some setups won't hand a background app a key window: come to the front, then take it. Scroll
+                // events still reach the page (they go to the window under the cursor, active or not).
+                NSApp.activate(ignoringOtherApps: true)
+                panel.makeKeyAndOrderFront(nil)
+                panel.makeFirstResponder(view)
+            }
+            // Belt and braces: any Enter/Esc that reaches SnapNow at all
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+                if [36, 76, 53].contains(Int(e.keyCode)) { self?.stopRequested = true; return nil }
+                return e
+            }
+            note("hud: key \(panel.isKeyWindow), app active \(NSApp.isActive)")
         }
+        private var keyMonitor: Any?
 
-        func close() { panel.orderOut(nil) }
+        func close() {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
+            panel.orderOut(nil)
+        }
     }
 }
