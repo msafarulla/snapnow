@@ -1,5 +1,4 @@
 import AppKit
-import Carbon
 import ScreenCaptureKit
 
 /// Scrolling capture: pick an area over something that scrolls (a web page, a document, a long chat) and
@@ -97,8 +96,6 @@ enum ScrollCapture {
         }
         try? await Task.sleep(nanoseconds: 350_000_000)   // the picker's overlay is gone and the page is still
         let placed = NSEvent.mouseLocation
-        let esc = EscapeKey()   // Esc stops it (a Carbon hot key, so it works whichever app is in front)
-        defer { esc.release() }
 
         var shotError: String?
         func shoot() async -> Frame? {
@@ -129,7 +126,7 @@ enum ScrollCapture {
             }
             return last
         }
-        func moved() -> Bool { hud.stopRequested || esc.pressed || hypot(NSEvent.mouseLocation.x - placed.x, NSEvent.mouseLocation.y - placed.y) > cancelDistance }
+        func moved() -> Bool { hud.stopRequested || hypot(NSEvent.mouseLocation.x - placed.x, NSEvent.mouseLocation.y - placed.y) > cancelDistance }
 
         guard let first = await settled() else {
             note("no first shot: \(shotError ?? "?")")
@@ -300,41 +297,6 @@ enum ScrollCapture {
         if let p = pending { stitcher.append(p.frame, rows: p.rows) }       // the last view's bottom, as it is
         if footer > 0 { stitcher.append(previous, rows: (h - footer)..<h) }   // the sticky footer, once
         return (stitcher, frames, reason)
-    }
-
-    /// Enter and Esc as global hot keys for the length of a capture: both stop it and keep what it has.
-    private final class EscapeKey {
-        private(set) var pressed = false
-        private var ref: EventHotKeyRef?
-        private var ref2: EventHotKeyRef?
-        private var handler: EventHandlerRef?
-        private static let signature = OSType(0x5363726C)   // 'Scrl'
-
-        init() {
-            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-            let me = Unmanaged.passUnretained(self).toOpaque()
-            InstallEventHandler(GetApplicationEventTarget(), { _, event, userData in
-                var id = EventHotKeyID()
-                GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
-                                  MemoryLayout<EventHotKeyID>.size, nil, &id)
-                if id.signature == EscapeKey.signature, let userData {
-                    Unmanaged<EscapeKey>.fromOpaque(userData).takeUnretainedValue().pressed = true
-                    return noErr
-                }
-                return OSStatus(eventNotHandledErr)
-            }, 1, &spec, me, &handler)
-            RegisterEventHotKey(UInt32(kVK_Escape), 0, EventHotKeyID(signature: Self.signature, id: 1), GetApplicationEventTarget(), 0, &ref)
-            RegisterEventHotKey(UInt32(kVK_Return), 0, EventHotKeyID(signature: Self.signature, id: 2), GetApplicationEventTarget(), 0, &ref2)
-        }
-
-        func release() {
-            if let ref { UnregisterEventHotKey(ref) }
-            if let ref2 { UnregisterEventHotKey(ref2) }
-            if let handler { RemoveEventHandler(handler) }
-            ref = nil
-            ref2 = nil
-            handler = nil
-        }
     }
 
     /// Writes a shot next to the log (~/Library/Caches/SnapLite/<name>.png) when a run has to give up.
