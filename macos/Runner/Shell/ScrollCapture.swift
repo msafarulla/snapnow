@@ -196,8 +196,9 @@ enum ScrollCapture {
         var ticked = false        // the last movement was a wheel tick (pixel scrolling had done nothing)
         var paged = false         // a paged view (Shorts, Reels): each tick is a new page, stacked whole
         var retried = false       // one more shot after an alignment that failed (content may have been mid-load)
-        var ask = step                   // what the next scroll asks for (px), tuned to `step` from what each scroll moved
+        var ask = step * 3 / 4           // what the next scroll asks for (px): 30% of the view first, tuned from what each scroll moved
         var gain = 1.0                   // measured movement per pixel asked, smoothed
+        var gainKnown = false
         var halvings = 0                 // overshoots undone so far
         func advance(_ next: Frame, by d: Int, content: Int) {
             if let p = pending {
@@ -254,8 +255,11 @@ enum ScrollCapture {
                 if !ticked, ask > 0 {
                     // What this app does with a scroll, and the ask that should land near the wanted step
                     let measured = Double(moved) / Double(ask)
-                    gain = gain == 1.0 && frames == 2 ? measured : gain * 0.5 + measured * 0.5
-                    ask = min(max(8, Int(Double(step) / max(0.05, gain))), (content - header) * 6 / 10)
+                    gain = gainKnown ? gain * 0.5 + measured * 0.5 : measured
+                    gainKnown = true
+                    // Aim at the wanted step, but never ask for more than 45% of the view: views with scroll
+                    // acceleration move disproportionately further for a bigger ask
+                    ask = min(max(8, Int(Double(step) / max(0.05, gain))), step * 9 / 8, (content - header) * 6 / 10)
                     note("  gain \(String(format: "%.2f", gain)), next ask \(ask) px")
                 }
                 if !cropDecided {
@@ -382,10 +386,12 @@ enum ScrollCapture {
         event.post(tap: .cghidEventTap)
     }
 
-    /// A continuous (trackpad-style) scroll of `points` down (negative: up), delivered to whatever is under `at`.
-    /// One event normally (browsers apply it at once); `chunked` sends it as a gesture of ≤80-point pieces with
-    /// scroll phases, for views that ignore one big event (tried when a scroll did nothing).
-    private static func scroll(by points: Int, at: CGPoint, chunked: Bool) {
+    /// A continuous (trackpad-style) scroll of `points` down (negative: up), delivered to whatever is under `at`
+    /// as a run of small events (≤60 points, 15 ms apart), the way a trackpad delivers it: one big event trips
+    /// scroll acceleration in some views (a terminal pane moved more than a whole screen for one ask) and is
+    /// ignored outright by others. `gesture` adds scroll phases (began, changed…, ended) for views that want a
+    /// proper gesture (tried when the plain run did nothing).
+    private static func scroll(by points: Int, at: CGPoint, chunked gesture: Bool) {
         func post(_ delta: Int, phase: Int64?) {
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(-delta), wheel2: 0, wheel3: 0) else { return }
             event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
@@ -396,17 +402,16 @@ enum ScrollCapture {
             event.location = cg(at)
             event.post(tap: .cghidEventTap)
         }
-        guard chunked else { post(points, phase: nil); return }
         var left = points
         let sign = left < 0 ? -1 : 1
-        post(0, phase: 1)
+        if gesture { post(0, phase: 1) }
         while left != 0 {
-            let chunk = sign * min(80, abs(left))
-            post(chunk, phase: 2)
+            let chunk = sign * min(60, abs(left))
+            post(chunk, phase: gesture ? 2 : nil)
             left -= chunk
-            usleep(12_000)
+            usleep(15_000)
         }
-        post(0, phase: 4)
+        if gesture { post(0, phase: 4) }
     }
 
     // MARK: Frames and matching
