@@ -146,7 +146,7 @@ enum ScrollCapture {
                                       }
                                   },
                                   cancelled: moved, progress: { hud.text = "Scrolling… \($0) shots · Enter stops and keeps it" })
-        let stitcher = result.stitcher, frames = result.frames, reason = result.reason
+        let stitcher = result.stitcher, frames = result.frames, reason = result.reason, gapsTotal = result.gaps
         let w = first.w
         note("done: \(frames) shots, \(stitcher.height) px tall \(reason)")
         guard let image = stitcher.image(width: w) else { return nil }
@@ -156,6 +156,10 @@ enum ScrollCapture {
         guard CGImageDestinationFinalize(dest) else { return nil }
         if sound {
             NSSound(contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif", byReference: true)?.play()
+        }
+        if gapsTotal > 0 {
+            Toast.show("Scrolling capture: \(gapsTotal) join\(gapsTotal == 1 ? "" : "s") could not be matched", symbol: "exclamationmark.triangle.fill",
+                       detail: "Marked with a dashed line. The content changed while scrolling, or the view jumped.")
         }
         if reason.hasPrefix("found nothing") {
             Toast.show("Nothing scrolled under the cursor", symbol: "exclamationmark.triangle.fill",
@@ -180,7 +184,7 @@ enum ScrollCapture {
     /// times as much), so the engine starts with a small probe, measures what each scroll really moved, and
     /// keeps the ask adjusted to land near `step`; a scroll that overshoots past any overlap is undone and the ask halved.
     @MainActor static func stitch(first: Frame, scale: CGFloat, step: Int, next: @MainActor () async -> Frame?, scroll: @MainActor (ScrollKind) -> Void,
-                                  cancelled: @MainActor () -> Bool, progress: @MainActor (Int) -> Void = { _ in }) async -> (stitcher: Stitcher, frames: Int, reason: String) {
+                                  cancelled: @MainActor () -> Bool, progress: @MainActor (Int) -> Void = { _ in }) async -> (stitcher: Stitcher, frames: Int, reason: String, gaps: Int) {
         let h = first.h
         let shoot = next   // (`next` is the newest shot inside the loop)
         var stitcher = Stitcher(first: first)
@@ -200,6 +204,9 @@ enum ScrollCapture {
         var gain = 1.0                   // measured movement per pixel asked, smoothed
         var gainKnown = false
         var halvings = 0                 // overshoots undone so far
+        var lastScroll = 0               // what the last forward smooth scroll asked for (px), for backing up
+        var gaps = 0                     // shots in a row that could not be placed (the picture gets a marked gap)
+        var gapsTotal = 0
         func advance(_ next: Frame, by d: Int, content: Int) {
             if let p = pending {
                 let inNext = (content - d - p.rows.count)..<(content - d)
@@ -218,7 +225,8 @@ enum ScrollCapture {
                 // A stall: once more with a smaller smooth scroll (a view may ignore a big one), then a wheel
                 // tick (a paged view), and only then the end
                 ticked = paged || stalls >= 2
-                scroll(ticked ? .tick : .pixels(stalls == 1 ? max(8, ask / 2) : ask, chunked: stalls == 1))
+                lastScroll = ticked ? 0 : (stalls == 1 ? max(8, ask / 2) : ask)
+                scroll(ticked ? .tick : .pixels(lastScroll, chunked: stalls == 1))
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
             guard let next = await shoot() else { reason = "lost a shot"; break }
@@ -251,6 +259,7 @@ enum ScrollCapture {
             case .moved(let moved):
                 stalls = 0
                 assumedRuns = 0
+                gaps = 0
                 d = moved
                 if !ticked, ask > 0 {
                     // What this app does with a scroll, and the ask that should land near the wanted step
@@ -305,13 +314,14 @@ enum ScrollCapture {
                     note("shot \(frames): retrying")
                     continue
                 }
-                if !ticked, halvings < 4, ask > 8 {
+                var current = next
+                if !ticked, halvings < 4, ask > 8, lastScroll > 0 {
                     // Most likely the scroll moved the content past any overlap (apps that scroll several times
                     // what they're asked): back up by the same amount and try a smaller ask
-                    scroll(.pixels(-ask, chunked: false))
+                    scroll(.pixels(-lastScroll, chunked: false))
                     try? await Task.sleep(nanoseconds: 300_000_000)
                     let back = await shoot()
-                    note("shot \(frames): backing up \(ask) px: same \(back?.same(as: previous) ?? false), common rows \(back.map { Frame.commonRows(previous, $0, fromTop: true, limit: h) } ?? -1) of \(h)")
+                    note("shot \(frames): backing up \(lastScroll) px: same \(back?.same(as: previous) ?? false), common rows \(back.map { Frame.commonRows(previous, $0, fromTop: true, limit: h) } ?? -1) of \(h)")
                     if let back, back.same(as: previous) || Frame.commonRows(previous, back, fromTop: true, limit: h) > h * 3 / 4 {
                         halvings += 1
                         ask = max(8, ask / 2)
@@ -319,10 +329,22 @@ enum ScrollCapture {
                         note("shot \(frames): overshot; backed up, ask now \(ask) px")
                         continue
                     }
+                    if let back { current = back }
                 }
-                reason = "could not align a shot"
-                dump(previous, "scroll-unsure-prev"); dump(next, "scroll-unsure-next")   // for diagnosis
-                break loop
+                // Can't place this view against the last one: rather than end, mark a gap and carry on from here
+                // (a page that changed under us, a view that jumped). Several in a row, and it's not a capture.
+                gaps += 1
+                gapsTotal += 1
+                if gaps >= 4 { reason = "could not align four shots in a row"; dump(previous, "scroll-unsure-prev"); dump(next, "scroll-unsure-next"); break loop }
+                if gaps == 1 { dump(previous, "scroll-unsure-prev"); dump(next, "scroll-unsure-next") }   // for diagnosis
+                note("shot \(frames): gap")
+                if let p = pending { stitcher.append(p.frame, rows: p.rows) }
+                pending = nil
+                stitcher.appendGap(rows: max(4, Int(6 * scale)), width: current.w)
+                stitcher.append(current, rows: header..<(h - footer))
+                retried = false
+                previous = current
+                continue
             }
             retried = false
             if pending == nil {
@@ -339,7 +361,7 @@ enum ScrollCapture {
         if reason.isEmpty, pending == nil, !paged, frames >= 2 { reason = "found nothing that scrolls under the cursor" }
         if let p = pending { stitcher.append(p.frame, rows: p.rows) }       // the last view's bottom, as it is
         if footer > 0, pending != nil || paged { stitcher.append(previous, rows: (h - footer)..<h) }   // the sticky footer, once
-        return (stitcher, frames, reason)
+        return (stitcher, frames, reason, gapsTotal)
     }
 
     private static func th(_ scale: CGFloat) -> Int { max(16, Int(24 * scale)) }
@@ -690,6 +712,21 @@ enum ScrollCapture {
         var crop: Range<Int>?                      // columns kept, when only part of the width scrolls
 
         init(first: Frame) { parts = [(first.image, first.h)]; height = first.h }
+
+        /// A thin dark band with a dashed line: where two views could not be joined.
+        mutating func appendGap(rows: Int, width: Int) {
+            guard let ctx = CGContext(data: nil, width: width, height: rows, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            ctx.setFillColor(CGColor(red: 0.15, green: 0.15, blue: 0.17, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: width, height: rows))
+            ctx.setStrokeColor(CGColor(red: 1, green: 0.6, blue: 0.1, alpha: 1))
+            ctx.setLineWidth(CGFloat(max(1, rows / 3)))
+            ctx.setLineDash(phase: 0, lengths: [CGFloat(rows * 2), CGFloat(rows)])
+            ctx.move(to: CGPoint(x: 0, y: CGFloat(rows) / 2))
+            ctx.addLine(to: CGPoint(x: CGFloat(width), y: CGFloat(rows) / 2))
+            ctx.strokePath()
+            if let image = ctx.makeImage() { parts.append((image, rows)); height += rows }
+        }
 
         /// Drops the bottom `rows` of the first shot (a sticky footer, appended once at the end instead).
         mutating func trimFirst(bottom rows: Int) {
