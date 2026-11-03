@@ -141,7 +141,7 @@ enum ScrollCapture {
         let result = await stitch(first: first, scale: scale, step: Int(CGFloat(stepPoints) * scale),
                                   next: { await settled() }, scroll: { kind in
                                       switch kind {
-                                      case .pixels: scroll(by: stepPoints, at: centre)
+                                      case .pixels(let px): scroll(by: Int((CGFloat(px) / scale).rounded()), at: centre)
                                       case .tick: tick(at: centre)
                                       }
                                   },
@@ -171,12 +171,18 @@ enum ScrollCapture {
     /// The scroll-shoot-align loop, apart from the screen: `next` gives the shot after a `scroll`, so it can be
     /// driven by synthetic frames in tests. Returns what was stitched, the number of shots, and why it stopped
     /// ("" = the end of the page, "stopped" = the user, otherwise a problem to tell the user about).
-    /// How the engine asks for movement: smooth pixels (pages), or a wheel tick (paged views like Shorts).
-    enum ScrollKind { case pixels, tick }
+    /// How the engine asks for movement: smooth scrolling by so many image pixels (negative = back up), or a
+    /// wheel tick (paged views like Shorts).
+    enum ScrollKind { case pixels(Int), tick }
 
+    /// `step`: the movement wanted per scroll, in image pixels. Apps turn the same scroll event into very
+    /// different distances (a browser moves by what it's told, a terminal by whole lines, some views by several
+    /// times as much), so the engine starts with a small probe, measures what each scroll really moved, and
+    /// keeps the ask adjusted to land near `step`; a scroll that overshoots past any overlap is undone and the ask halved.
     @MainActor static func stitch(first: Frame, scale: CGFloat, step: Int, next: @MainActor () async -> Frame?, scroll: @MainActor (ScrollKind) -> Void,
                                   cancelled: @MainActor () -> Bool, progress: @MainActor (Int) -> Void = { _ in }) async -> (stitcher: Stitcher, frames: Int, reason: String) {
         let h = first.h
+        let shoot = next   // (`next` is the newest shot inside the loop)
         var stitcher = Stitcher(first: first)
         var header = 0, footer = 0                            // rows that stay put (sticky bars), from the first scroll
         var previous = first
@@ -190,6 +196,9 @@ enum ScrollCapture {
         var ticked = false        // the last movement was a wheel tick (pixel scrolling had done nothing)
         var paged = false         // a paged view (Shorts, Reels): each tick is a new page, stacked whole
         var retried = false       // one more shot after an alignment that failed (content may have been mid-load)
+        var ask = step                   // what the next scroll asks for (px), tuned to `step` from what each scroll moved
+        var gain = 1.0                   // measured movement per pixel asked, smoothed
+        var halvings = 0                 // overshoots undone so far
         func advance(_ next: Frame, by d: Int, content: Int) {
             if let p = pending {
                 let inNext = (content - d - p.rows.count)..<(content - d)
@@ -202,10 +211,14 @@ enum ScrollCapture {
             if cancelled() { reason = "stopped"; break }
             progress(frames)
             // A wheel tick after a stall: a paged view ignores smooth scrolling but turns a page per tick
-            ticked = paged || stalls > 0
-            scroll(ticked ? .tick : .pixels)
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard let next = await next() else { reason = "lost a shot"; break }
+            if retried {
+                try? await Task.sleep(nanoseconds: 400_000_000)   // a retry shoots again without scrolling
+            } else {
+                ticked = paged || stalls > 0
+                scroll(ticked ? .tick : .pixels(ask))
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            guard let next = await shoot() else { reason = "lost a shot"; break }
             frames += 1
             if next.same(as: previous) {                     // nothing moved at all: the end, or not scrollable
                 stalls += 1
@@ -226,8 +239,8 @@ enum ScrollCapture {
                 previous = next
                 continue
             }
-            let shift = Frame.displacement(from: previous, to: next, header: header, content: content, scale: scale,
-                                           expected: ticked ? max(8, step / 6) : step)
+            let expected = ticked ? max(8, step / 6) : max(2, Int(Double(ask) * gain))
+            let shift = Frame.displacement(from: previous, to: next, header: header, content: content, scale: scale, expected: expected)
             note("shot \(frames): header \(header), footer \(footer), shift \(shift)\(ticked ? " (after a wheel tick)" : "")")
             var d: Int
             switch shift {
@@ -235,6 +248,13 @@ enum ScrollCapture {
                 stalls = 0
                 assumedRuns = 0
                 d = moved
+                if !ticked, ask > 0 {
+                    // What this app does with a scroll, and the ask that should land near the wanted step
+                    let measured = Double(moved) / Double(ask)
+                    gain = gain == 1.0 && frames == 2 ? measured : gain * 0.5 + measured * 0.5
+                    ask = min(max(8, Int(Double(step) / max(0.05, gain))), content - header - th(scale) * 2)
+                    note("  gain \(String(format: "%.2f", gain)), next ask \(ask) px")
+                }
                 if !cropDecided {
                     // Only part of the width scrolls (a feed between sidebars): keep just that part, when what stays
                     // put on the sides is real content (a blank margin is left alone, so the page keeps its shape)
@@ -258,7 +278,7 @@ enum ScrollCapture {
             case .flat:                                       // nothing to align on (a blank stretch): take the scroll as sent
                 assumedRuns += 1
                 if assumedRuns > 3 { break loop }
-                d = min(step, content - header)
+                d = min(expected, content - header)
             case .unsure:
                 if ticked {
                     // Pixel scrolling did nothing and a wheel tick changed most of the view: a paged view. The
@@ -277,6 +297,21 @@ enum ScrollCapture {
                     retried = true
                     note("shot \(frames): retrying")
                     continue
+                }
+                if !ticked, halvings < 4, ask > 8 {
+                    // Most likely the scroll moved the content past any overlap (apps that scroll several times
+                    // what they're asked): back up by the same amount and try a smaller ask
+                    scroll(.pixels(-ask))
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    let back = await shoot()
+                    note("shot \(frames): backing up \(ask) px: same \(back?.same(as: previous) ?? false), common rows \(back.map { Frame.commonRows(previous, $0, fromTop: true, limit: h) } ?? -1) of \(h)")
+                    if let back, back.same(as: previous) || Frame.commonRows(previous, back, fromTop: true, limit: h) > h * 3 / 4 {
+                        halvings += 1
+                        ask = max(8, ask / 2)
+                        retried = false
+                        note("shot \(frames): overshot; backed up, ask now \(ask) px")
+                        continue
+                    }
                 }
                 reason = "could not align a shot"
                 dump(previous, "scroll-unsure-prev"); dump(next, "scroll-unsure-next")   // for diagnosis
@@ -299,6 +334,8 @@ enum ScrollCapture {
         if footer > 0, pending != nil || paged { stitcher.append(previous, rows: (h - footer)..<h) }   // the sticky footer, once
         return (stitcher, frames, reason)
     }
+
+    private static func th(_ scale: CGFloat) -> Int { max(16, Int(24 * scale)) }
 
     /// Writes a shot next to the log (~/Library/Caches/SnapLite/<name>.png) when a run has to give up.
     private static func dump(_ frame: Frame, _ name: String) {
@@ -571,15 +608,20 @@ enum ScrollCapture {
                     note("  good strips \(best.goodStrips): here \(here), around ±5/±9 \(around)")
                 }
                 note("  strips \(strips) · at the ask \(expected): mean \(best.mean), \(best.good)/\(best.n) strips good, distinct \(distinct)")
-                if plausible && distinct { return .moved(best.d) }
+                if plausible && distinct {
+                    // Settle on the local best row (the ask may be a few rows off when the app's gain is still being learnt)
+                    var d = best.d, m = best.mean
+                    while d + 1 < content - header, joint(d + 1).mean < m { d += 1; m = joint(d).mean }
+                    while d > 2, joint(d - 1).mean < m { d -= 1; m = joint(d).mean }
+                    return .moved(d)
+                }
             }
             // Otherwise each strip votes for its best shift (0…1.5× the ask); a strip whose match is ambiguous
             // (nearly as good somewhere else, as on a plain photo or blank paper) doesn't vote
             var votes: [(d: Int, s: Int)] = []
-            let maxShift = max(expected * 3 / 2, th)
-            for strip in strips {
+            for strip in strips {                             // every shift that keeps the strip in view
                 var scores: [(y: Int, s: Int)] = []
-                for y in stride(from: max(header, strip - maxShift), through: strip, by: 1) { scores.append((y, score(strip: strip, at: y))) }
+                for y in stride(from: header, through: strip, by: 1) { scores.append((y, score(strip: strip, at: y))) }
                 guard let best = scores.map(\.s).min(), best <= 12 else { continue }
                 let ties = scores.filter { $0.s <= best + 1 }
                 let pick = ties.min { abs(strip - $0.y - expected) < abs(strip - $1.y - expected) }!

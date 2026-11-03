@@ -112,6 +112,7 @@ struct Page {
 struct SplitMix { var s: UInt64; init(_ s: UInt64) { self.s = s }
     mutating func next() -> UInt64 { s &+= 0x9E3779B97F4A7C15; var z = s; z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9; z = (z ^ (z >> 27)) &* 0x94D049BB133111EB; return z ^ (z >> 31) } }
 
+/// How a page answers a smooth scroll of `ask` pixels: exact, a fraction, whole lines only, or several times as much.
 func check(_ name: String, page: Page, step: Int, actualStep: (Int) -> Int) async {
     var off = 0
     let first = page.frame(at: 0)
@@ -119,7 +120,7 @@ func check(_ name: String, page: Page, step: Int, actualStep: (Int) -> Int) asyn
         next: { page.frame(at: off) },
         scroll: { kind in
             switch (kind, page.paged) {
-            case (.pixels, false): off = min(page.maxOffset, off + actualStep(off))
+            case (.pixels(let ask), false): off = min(page.maxOffset, max(0, off + actualStep(ask)))
             case (.tick, false): off = min(page.maxOffset, off + 30)            // a notch: three lines
             case (.pixels, true): break                                          // ignored by a paged view
             case (.tick, true): off = min(page.maxOffset, off + page.view - page.header)
@@ -153,24 +154,26 @@ extension ScrollCapture.Frame {
 }
 
 @main struct Harness2 { static func main() async {
+    let fast = Page(w: 1000, hs: 4000, view: 800, header: 50, footer: 120, seed: 29)
+    await check("a view that scrolls 5× what it's asked (Herdr pane)", page: fast, step: 320, actualStep: { $0 * 5 })
     let term = Page(w: 1000, hs: 3000, view: 800, header: 0, footer: 0, seed: 23, terminal: 20)
-    await check("terminal: whole lines only (asked 330, scrolls 320)", page: term, step: 330, actualStep: { _ in 320 })
+    await check("terminal: whole lines only (asked 330, scrolls 320)", page: term, step: 330, actualStep: { $0 })
     var wide = Page(w: 1400, hs: 3200, view: 800, header: 60, footer: 0, seed: 13); wide.sidebars = 450
-    await check("feed between WIDE static sidebars (most of the width stays put)", page: wide, step: 320, actualStep: { _ in 320 })
+    await check("feed between WIDE static sidebars (most of the width stays put)", page: wide, step: 320, actualStep: { $0 })
     var video = Page(w: 1200, hs: 800, view: 800, header: 60, footer: 0, seed: 17); video.video = CGRect(x: 300, y: 200, width: 500, height: 300)
     await check("a video playing in a page that doesn't scroll", page: video, step: 320, actualStep: { _ in 0 })
     var shorts = Page(w: 900, hs: 60 + 5 * 640, view: 700, header: 60, footer: 0, seed: 21); shorts.paged = true
     await check("paged view (Shorts): a wheel tick per page", page: shorts, step: 280, actualStep: { _ in 0 })
     var lazyFeed = Page(w: 1200, hs: 3200, view: 800, header: 60, footer: 0, seed: 5); lazyFeed.sidebars = 300; lazyFeed.lazy = 220
-    await check("lazy-loading feed (bottom placeholders change after the scroll)", page: lazyFeed, step: 320, actualStep: { _ in 320 })
+    await check("lazy-loading feed (bottom placeholders change after the scroll)", page: lazyFeed, step: 320, actualStep: { $0 })
     var feed = Page(w: 1200, hs: 3200, view: 800, header: 60, footer: 0, seed: 11); feed.sidebars = 300
-    await check("feed between static sidebars (Facebook)", page: feed, step: 320, actualStep: { _ in 320 })
-    await check("not scrollable (one view tall)", page: Page(w: 800, hs: 700, view: 700, header: 0, footer: 0), step: 280, actualStep: { _ in 280 })
-    await check("shorter than one scroll", page: Page(w: 800, hs: 900, view: 700, header: 40, footer: 0), step: 280, actualStep: { _ in 280 })
-    await check("plain page, no bars", page: Page(w: 800, hs: 3000, view: 700, header: 0, footer: 0), step: 280, actualStep: { _ in 280 })
-    await check("sticky header + footer", page: Page(w: 800, hs: 3000, view: 700, header: 56, footer: 36), step: 280, actualStep: { _ in 280 })
-    await check("sluggish page (scrolls 70% of the ask)", page: Page(w: 800, hs: 2600, view: 700, header: 56, footer: 0), step: 280, actualStep: { _ in 196 })
-    await check("blank stretch in the middle", page: Page(w: 800, hs: 3200, view: 700, header: 0, footer: 36, blank: 1200..<2100), step: 280, actualStep: { _ in 280 })
-    await check("retina-ish wide page", page: Page(w: 2280, hs: 4000, view: 1850, header: 120, footer: 0, seed: 3), step: 740, actualStep: { _ in 740 })
+    await check("feed between static sidebars (Facebook)", page: feed, step: 320, actualStep: { $0 })
+    await check("not scrollable (one view tall)", page: Page(w: 800, hs: 700, view: 700, header: 0, footer: 0), step: 280, actualStep: { $0 })
+    await check("shorter than one scroll", page: Page(w: 800, hs: 900, view: 700, header: 40, footer: 0), step: 280, actualStep: { $0 })
+    await check("plain page, no bars", page: Page(w: 800, hs: 3000, view: 700, header: 0, footer: 0), step: 280, actualStep: { $0 })
+    await check("sticky header + footer", page: Page(w: 800, hs: 3000, view: 700, header: 56, footer: 36), step: 280, actualStep: { $0 })
+    await check("sluggish page (scrolls 70% of the ask)", page: Page(w: 800, hs: 2600, view: 700, header: 56, footer: 0), step: 280, actualStep: { $0 * 7 / 10 })
+    await check("blank stretch in the middle", page: Page(w: 800, hs: 3200, view: 700, header: 0, footer: 36, blank: 1200..<2100), step: 280, actualStep: { $0 })
+    await check("retina-ish wide page", page: Page(w: 2280, hs: 4000, view: 1850, header: 120, footer: 0, seed: 3), step: 740, actualStep: { $0 })
     exit(0)
 } }
