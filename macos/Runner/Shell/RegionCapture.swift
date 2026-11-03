@@ -34,6 +34,13 @@ final class RegionCapture {
         return found
     }
 
+    /// Whether the picker shows the "capture everything that scrolls" button on the hovered window: with
+    /// Accessibility access only on windows that scroll, otherwise on every window (it can't tell).
+    var offersScroll: Bool {
+        guard onPicked == nil, Self.scrollHandler != nil, !isDragging, hoveredWindow != nil, !overOffered else { return false }
+        return AXIsProcessTrusted() ? scrollsUnderCursor : true
+    }
+
     /// Whether an AXScrollArea (or a web area) encloses the point (global Cocoa coordinates).
     private static func scrollArea(at p: CGPoint) -> Bool {
         guard AXIsProcessTrusted() else { return false }
@@ -426,6 +433,8 @@ private final class KeyPanel: NSPanel {
 
 private final class RegionView: NSView {
     private unowned let capture: RegionCapture
+    private var scrollButton: CGRect?   // "Capture everything that scrolls", on the hovered window (local coords)
+    private var scrollButtonPressed = false
     private let frozen: RegionCapture.Frozen
     private static let orange = NSColor(srgbRed: 0.98, green: 0.62, blue: 0.13, alpha: 1)
     private static let loupe: CGFloat = 150, cells: CGFloat = 19   // magnifier size; pixels across it
@@ -504,6 +513,26 @@ private final class RegionView: NSView {
         }
 
         let m = CGPoint(x: capture.mouse.x - origin.x, y: capture.mouse.y - origin.y)
+
+        // The scrolling capture, offered as a button near the top of the hovered window
+        scrollButton = nil
+        if !capture.isDragging, let f = focus, capture.offersScroll {
+            let text = "↕  Capture everything that scrolls"
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: NSColor.white]
+            let ts = (text as NSString).size(withAttributes: attributes)
+            var r = CGRect(x: f.midX - (ts.width + 32) / 2, y: f.maxY - ts.height - 14 - 52, width: ts.width + 32, height: ts.height + 14)
+            if r.minY < f.minY + 8 { r.origin.y = f.midY - r.height / 2 }
+            let over = r.contains(m)
+            let pill = NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2)
+            (over ? Self.orange : NSColor(white: 0.12, alpha: 0.92)).setFill()
+            pill.fill()
+            NSColor.white.withAlphaComponent(0.7).setStroke()
+            pill.lineWidth = 1
+            pill.stroke()
+            (text as NSString).draw(at: CGPoint(x: r.minX + 16, y: r.minY + 7), withAttributes: attributes)
+            scrollButton = r
+        }
+
         guard bounds.contains(m) else { return }
 
         if !capture.isDragging {
@@ -523,7 +552,7 @@ private final class RegionView: NSView {
         let loupeRect = drawLoupe(at: m, ctx: ctx, label: size)
         if capture.dragStart == nil {
             let last = capture.offered.map { "\nEnter or click inside the outline: last area (\(Int($0.width.rounded())) x \(Int($0.height.rounded())))" } ?? ""
-            let scroll = capture.scrollsUnderCursor ? "\n↕ This scrolls: press S to capture all of it" : ""
+            let scroll = capture.offersScroll ? "\n↕ Scrolls? S or the button captures all of it" : ""
             hint("Click, hold, and drag to select region" + last + scroll, beside: loupeRect)
         }
     }
@@ -615,6 +644,10 @@ private final class RegionView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         capture.mouse = NSEvent.mouseLocation
+        if let b = scrollButton, b.contains(local(CGRect(origin: capture.mouse, size: .zero)).origin) {
+            scrollButtonPressed = true   // a click on the button, not the start of a drag
+            return
+        }
         capture.dragStart = capture.mouse
         capture.lastDrag = nil
         capture.dragScreen = capture.screenUnderMouse()
@@ -622,6 +655,7 @@ private final class RegionView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if scrollButtonPressed { return }
         capture.mouse = NSEvent.mouseLocation
         capture.lastDrag = capture.mouse
         capture.redraw()
@@ -629,6 +663,13 @@ private final class RegionView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         let here = NSEvent.mouseLocation
+        if scrollButtonPressed {
+            scrollButtonPressed = false
+            capture.mouse = here
+            if let b = scrollButton, b.contains(local(CGRect(origin: here, size: .zero)).origin) { capture.scrollPicked() }
+            capture.redraw()
+            return
+        }
         // Releasing inside the auto-hiding Dock's strip: macOS reports the release at the Dock's top edge
         // (y ≈ 77), far from where the drag actually was, with no drag events in between — so the box bottom
         // would snap there and cut whatever sat in the Dock. A genuine release never jumps that far from the
