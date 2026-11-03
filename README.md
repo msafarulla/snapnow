@@ -113,6 +113,9 @@ you go) can confuse the alignment; SnapNow then says so and keeps what it had.
 | Crop | C | |
 | Copy Text | G | Copies all text in the image. |
 
+The toolbar runs across the top by default. **View › Move Toolbar to Left** (or right-click the toolbar)
+stands it down the left edge instead, which suits wide screens; the choice is remembered.
+
 <img align="right" src="docs/screenshots/arrow-options.png" alt="Arrow options: ten head types, head size, line patterns, tapered, outline, shadow" width="250">
 
 **Click any annotation** and a bar appears above it, as in Snagit: one click on a colour bubble recolours it

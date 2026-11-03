@@ -150,6 +150,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });
     Native.getBool('pinOnTop').then((on) { if (on == true && !_pinTouched) _setPinned(true, save: false); });
     Native.getBool('inspector.hidden').then((hidden) { if (mounted && hidden == true) setState(() => _inspectorShown = false); });
+    Native.getBool('toolbar.left').then((left) { if (mounted && left != null) setState(() => toolbarLeft.value = left); });
     Native.getString('callout.style').then((v) {
       final s = CalloutStyle.values.where((s) => s.name == v).firstOrNull;
       if (mounted && s != null) setState(() => _calloutStyle = s);
@@ -295,7 +296,34 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   static const _chromeMargin = 10.0; // between a floating card and the window edge / another card
   static const _toolbarHeight = 52.0;
+  /// The toolbar card's width when it stands on the left: one button plus the card padding.
+  static const _toolbarLeftWidth = _ToolButton.width + _ToolbarCard.padding * 2;
+  /// Where the toolbar card sits: across the top (default) or down the left edge (pref `toolbar.left`,
+  /// toggled from View › Move Toolbar to Left/Top or the card's own right-click menu).
+  static final toolbarLeft = ValueNotifier<bool>(false);
+  bool get _toolbarLeft => toolbarLeft.value;
   bool _inspectorShown = true; // the properties card on the right (Settings persist it as inspector.hidden)
+
+  void _toggleToolbarSide() {
+    setState(() => toolbarLeft.value = !toolbarLeft.value);
+    Native.setBool('toolbar.left', toolbarLeft.value);
+  }
+
+  /// The toolbar card's right-click menu: move it to the other edge.
+  Future<void> _showToolbarMenu(Offset globalPos) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final sel = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(globalPos & const Size(1, 1), Offset.zero & overlay.size),
+      items: [
+        PopupMenuItem(value: 'side', height: 32, child: Row(children: [
+          Icon(_toolbarLeft ? Icons.vertical_align_top : Icons.align_horizontal_left, size: 17), const SizedBox(width: 10),
+          Text(_toolbarLeft ? 'Move Toolbar to Top' : 'Move Toolbar to Left', style: const TextStyle(fontSize: 13)),
+        ])),
+      ],
+    );
+    if (sel == 'side') _toggleToolbarSide();
+  }
 
   void _toggleInspector() {
     setState(() => _inspectorShown = !_inspectorShown);
@@ -304,7 +332,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   /// Where the floating chrome sits over the canvas area, so the picture is fitted and centred in the rest.
   EdgeInsets get _chromeInsets => widget.chromeInsets + EdgeInsets.only(
-        top: _toolbarHeight + _chromeMargin * 2,
+        top: _toolbarLeft ? 0 : _toolbarHeight + _chromeMargin * 2,
+        left: _toolbarLeft ? _toolbarLeftWidth + _chromeMargin * 2 : 0,
         right: _inspectorShown ? PropertiesPanel.width + _chromeMargin * 2 : 0,
       );
 
@@ -469,6 +498,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       case 'zoomFit': zoomToFit();
       case 'zoomActual': zoomActualSize();
       case 'pin': _setPinned(!_pinned);
+      case 'toolbarSide': _toggleToolbarSide();
       case 'manim': _openManim();
       case 'whiteboard': _openWhiteboard();
       case 'excalidraw': _openInWhiteboard();
@@ -2326,8 +2356,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       backgroundColor: chrome.backdrop,
       body: Stack(children: [
         Positioned.fill(child: state == null ? const Center(child: CircularProgressIndicator()) : _canvasArea(state)),
-        // The toolbar, centred over the part of the canvas the inspector leaves free
-        Positioned(top: m, left: m, right: m + inspectorRoom, height: _toolbarHeight, child: Center(child: _toolbar())),
+        // The toolbar: centred over the part of the canvas the inspector leaves free, or down the left edge
+        if (_toolbarLeft)
+          Positioned(top: m, left: m, bottom: m + widget.chromeInsets.bottom, width: _toolbarLeftWidth, child: Center(child: _toolbar()))
+        else
+          Positioned(top: m, left: m, right: m + inspectorRoom, height: _toolbarHeight, child: Center(child: _toolbar())),
         if (_inspectorShown)
           Positioned(
             top: m,
@@ -2934,7 +2967,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     final trailing = <Widget>[
       _ToolButton(icon: Icons.undo, label: 'Undo', onTap: _undo.isEmpty ? null : _undoAction),
       _ToolButton(icon: Icons.redo, label: 'Redo', onTap: _redo.isEmpty ? null : _redoAction),
-      const _ToolbarGap(),
+      _ToolbarGap(vertical: _toolbarLeft),
       if (Platform.isMacOS) KeyedSubtree(key: _shareKey, child: _ToolButton(icon: Icons.ios_share, label: 'Share', onTap: share)),
       if (!Platform.isMacOS) ...[
         _ToolButton(icon: Icons.content_copy, label: 'Copy', onTap: _copyImage),
@@ -2950,9 +2983,12 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     ];
     final fixedButtons = trailing.where((w) => w is! _ToolbarGap).length + (leading != null ? 1 : 0);
     final fixedGaps = 2 + (leading != null ? 1 : 0); // leading | tools | undo/redo | share
+    final vertical = _toolbarLeft;
     return LayoutBuilder(builder: (context, c) {
-      const toolW = _ToolButton.width + 2, moreW = toolW; // per-button footprint; More only when something overflows
-      final room = c.maxWidth - _ToolbarCard.padding * 2 - fixedButtons * toolW - fixedGaps * _ToolbarGap.width;
+      // per-button footprint along the bar; More only when something overflows
+      final toolW = (vertical ? _ToolButton.height : _ToolButton.width) + 2, moreW = toolW;
+      final room = (vertical ? c.maxHeight : c.maxWidth) - _ToolbarCard.padding * 2 - _ToolbarCard.border * 2 -
+          fixedButtons * toolW - fixedGaps * _ToolbarGap.width;
       final int n; // how many items show as buttons
       if (items.length * toolW <= room) {
         n = items.length; // everything fits: no More
@@ -2962,8 +2998,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final shown = items.sublist(0, n);
       final hidden = items.sublist(n);
       final moreActive = hidden.any((i) => i.$1 == barTool.name);
-      return _ToolbarCard(children: [
-        if (leading != null) ...[leading, const _ToolbarGap()],
+      return GestureDetector(onSecondaryTapUp: (d) => _showToolbarMenu(d.globalPosition), child: _ToolbarCard(vertical: vertical, children: [
+        if (leading != null) ...[leading, _ToolbarGap(vertical: vertical)],
         for (final i in shown)
           _ToolButton(icon: i.$2, label: i.$3, active: i.$1 == barTool.name, onTap: () => run(i.$1)),
         if (hidden.isNotEmpty)
@@ -2974,35 +3010,45 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             items: hidden,
             onSelected: run,
           ),
-        const _ToolbarGap(),
+        _ToolbarGap(vertical: vertical),
         ...trailing,
-      ]);
+      ]));
     });
   }
 }
 
-/// The floating toolbar: one chrome card holding the tool buttons, hugging its content.
+/// The floating toolbar: one chrome card holding the tool buttons, hugging its content — a row across the
+/// top, or a column down the left edge.
 class _ToolbarCard extends StatelessWidget {
   static const padding = 4.0;
+  static const border = 0.8; // SnapChrome.decoration()'s hairline, which the Container adds to the padding
+  final bool vertical;
   final List<Widget> children;
-  const _ToolbarCard({required this.children});
+  const _ToolbarCard({required this.children, this.vertical = false});
 
   @override
   Widget build(BuildContext context) => Container(
-        height: EditorPageState._toolbarHeight,
-        padding: const EdgeInsets.symmetric(horizontal: padding),
+        height: vertical ? null : EditorPageState._toolbarHeight,
+        width: vertical ? EditorPageState._toolbarLeftWidth : null,
+        padding: vertical ? const EdgeInsets.symmetric(vertical: padding) : const EdgeInsets.symmetric(horizontal: padding),
         decoration: SnapChrome.of(context).decoration(),
-        child: Row(mainAxisSize: MainAxisSize.min, children: children),
+        child: vertical
+            ? Column(mainAxisSize: MainAxisSize.min, children: children)
+            : Row(mainAxisSize: MainAxisSize.min, children: children),
       );
 }
 
-/// A hairline between toolbar groups.
+/// A hairline between toolbar groups (its footprint along the bar is [width] either way).
 class _ToolbarGap extends StatelessWidget {
   static const width = 13.0;
-  const _ToolbarGap();
+  final bool vertical;
+  const _ToolbarGap({this.vertical = false});
   @override
   Widget build(BuildContext context) => Container(
-      width: 1, height: 24, margin: const EdgeInsets.symmetric(horizontal: 6), color: Theme.of(context).colorScheme.outlineVariant);
+      width: vertical ? 24 : 1,
+      height: vertical ? 1 : 24,
+      margin: vertical ? const EdgeInsets.symmetric(vertical: 6) : const EdgeInsets.symmetric(horizontal: 6),
+      color: Theme.of(context).colorScheme.outlineVariant);
 }
 
 /// A toolbar button: the icon over a small label. The active tool sits in a tinted capsule; hovering lifts
@@ -3019,6 +3065,7 @@ class ToolbarButton extends StatelessWidget {
 
 class _ToolButton extends StatefulWidget {
   static const width = 52.0;
+  static const height = EditorPageState._toolbarHeight - 8;
   final IconData icon;
   final String label;
   final String? tooltip;
@@ -3047,8 +3094,8 @@ class _ToolButtonState extends State<_ToolButton> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 90),
           width: _ToolButton.width,
-          height: EditorPageState._toolbarHeight - 8,
-          margin: const EdgeInsets.symmetric(horizontal: 1),
+          height: _ToolButton.height,
+          margin: const EdgeInsets.all(1),
           decoration: BoxDecoration(
             color: widget.active ? s.primary.withValues(alpha: 0.14)
                 : _hover && enabled ? s.onSurface.withValues(alpha: 0.07) : Colors.transparent,
@@ -3082,6 +3129,7 @@ class _MoreButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
       tooltip: '',
+      padding: EdgeInsets.zero, // the button's own footprint only, so the bar's overflow count is exact
       position: PopupMenuPosition.under,
       onSelected: onSelected,
       itemBuilder: (_) => [

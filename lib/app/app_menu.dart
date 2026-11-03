@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../editor/editor_page.dart';
 import '../library/library_page.dart';
 import '../manim/manim_doc.dart';
 import '../manim/manim_studio_page.dart';
@@ -31,7 +32,10 @@ class AppMenuBar extends StatelessWidget {
     // Manim Studio, while open, gets its own menus
     return ValueListenableBuilder<ManimStudioPageState?>(
       valueListenable: ManimStudioPage.active,
-      builder: (context, studio, _) => studio != null ? _studioMenus(studio) : _menus(context),
+      builder: (context, studio, _) => studio != null
+          ? _studioMenus(studio)
+          // Rebuilt when the toolbar changes side, so View › Move Toolbar… names the other edge
+          : ValueListenableBuilder<bool>(valueListenable: EditorPageState.toolbarLeft, builder: (context, _, _) => _menus(context)),
     );
   }
 
@@ -176,6 +180,10 @@ class AppMenuBar extends StatelessWidget {
               item('Zoom Out', () => ed('zoomOut'), cmd(LogicalKeyboardKey.minus)),
               item('Zoom to Fit', () => ed('zoomFit'), cmd(LogicalKeyboardKey.digit0)),
               item('Actual Size', () => ed('zoomActual'), cmd(LogicalKeyboardKey.digit1)),
+            ]),
+          if (editing)
+            ?group([
+              item(EditorPageState.toolbarLeft.value ? 'Move Toolbar to Top' : 'Move Toolbar to Left', () => ed('toolbarSide')),
             ]),
           ?group([
             item(editing ? 'Back to Library' : 'Library', () => grid('library')),
