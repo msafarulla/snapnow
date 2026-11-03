@@ -186,6 +186,19 @@ enum ScrollCapture {
                 header = Frame.commonRows(previous, next, fromTop: true, limit: h * 2 / 5)
                 footer = Frame.commonRows(previous, next, fromTop: false, limit: h * 2 / 5)
                 if footer > 0 { stitcher.trimFirst(bottom: footer) }   // the sticky footer goes at the very end instead
+                // Only part of the width scrolls (a feed between sidebars): keep just that part, when what stays
+                // put on the sides is real content (a blank margin is left alone, so the page keeps its shape)
+                let moving = previous.movingColumns(to: next, rows: header..<(h - footer), scale: scale)
+                if moving.count >= 8, let l = moving.first, let r = moving.last {
+                    let pad = Int(8 * scale)
+                    let left = max(0, l - pad), right = min(previous.w, r + pad + 3)
+                    let all = previous.columns(scale: scale)
+                    let sides = all.filter { $0 < left || $0 >= right }
+                    if sides.count > all.count / 6, previous.textured(columns: sides, rows: header..<(h - footer)) {
+                        stitcher.crop = left..<right
+                        note("sidebars stay put: keeping columns \(left)..<\(right) of \(previous.w)")
+                    }
+                }
             }
             let content = h - footer
             let shift = Frame.displacement(from: previous, to: next, header: header, content: content, scale: scale, expected: step)
@@ -289,10 +302,52 @@ enum ScrollCapture {
         }
 
         /// Columns compared: every third pixel, keeping clear of the right edge where a scrollbar may sit.
-        func columns(scale: CGFloat) -> StrideTo<Int> { stride(from: 2, to: max(3, w - Int(20 * scale)), by: 3) }
+        func columns(scale: CGFloat) -> [Int] { Array(stride(from: 2, to: max(3, w - Int(20 * scale)), by: 3)) }
+
+        /// The compared columns that change between `self` and `next` somewhere in rows `rows`: what scrolls.
+        /// Columns that stay the same (a sidebar, a margin, a chat panel) would otherwise drown the match.
+        func movingColumns(to next: Frame, rows: Range<Int>, scale: CGFloat) -> [Int] {
+            let all = columns(scale: scale)
+            var moving: [Int] = []
+            px.withUnsafeBufferPointer { a in
+                next.px.withUnsafeBufferPointer { b in
+                    for x in all {
+                        var changed = false
+                        var y = rows.lowerBound
+                        while y < rows.upperBound {
+                            let i = (y * w + x) * 4
+                            if abs(Int(a[i]) - Int(b[i])) + abs(Int(a[i + 1]) - Int(b[i + 1])) + abs(Int(a[i + 2]) - Int(b[i + 2])) > 48 { changed = true; break }
+                            y += 4
+                        }
+                        if changed { moving.append(x) }
+                    }
+                }
+            }
+            return moving
+        }
+
+        /// Whether columns `xs` hold anything but flat colour in rows `rows` (a sidebar with content, not a margin).
+        func textured(columns xs: [Int], rows: Range<Int>) -> Bool {
+            guard !xs.isEmpty else { return false }
+            var sum = 0, n = 0
+            px.withUnsafeBufferPointer { a in
+                for y in stride(from: rows.lowerBound, to: rows.upperBound, by: 6) {
+                    for x in xs { let i = (y * w + x) * 4; sum += Int(a[i]) + Int(a[i + 1]) + Int(a[i + 2]); n += 3 }
+                }
+            }
+            guard n > 0 else { return false }
+            let mean = sum / n
+            var dev = 0
+            px.withUnsafeBufferPointer { a in
+                for y in stride(from: rows.lowerBound, to: rows.upperBound, by: 6) {
+                    for x in xs { let i = (y * w + x) * 4; dev += abs(Int(a[i]) - mean) + abs(Int(a[i + 1]) - mean) + abs(Int(a[i + 2]) - mean) }
+                }
+            }
+            return dev / n > 6
+        }
 
         /// Mean absolute RGB difference (0…255) between row `ya` here and row `yb` of `other`.
-        func rowDiff(_ ya: Int, _ other: Frame, _ yb: Int, cols: StrideTo<Int>) -> Int {
+        func rowDiff(_ ya: Int, _ other: Frame, _ yb: Int, cols: [Int]) -> Int {
             var sum = 0, n = 0
             px.withUnsafeBufferPointer { a in
                 other.px.withUnsafeBufferPointer { b in
@@ -308,7 +363,7 @@ enum ScrollCapture {
         }
 
         /// Whether rows `ys` have enough variation to be found again (a blank stretch matches everywhere).
-        func textured(_ ys: Range<Int>, cols: StrideTo<Int>) -> Bool {
+        func textured(_ ys: Range<Int>, cols: [Int]) -> Bool {
             var sum = 0, n = 0
             px.withUnsafeBufferPointer { a in
                 for y in ys {
@@ -357,7 +412,9 @@ enum ScrollCapture {
         /// look like their neighbours) go to the candidate closest to `expected`. `.flat` when `prev` has nothing
         /// to align on, `.unsure` when nothing matches well or the match is ambiguous.
         static func displacement(from prev: Frame, to next: Frame, header: Int, content: Int, scale: CGFloat, expected: Int) -> Shift {
-            let cols = prev.columns(scale: scale)
+            // Only the columns that scroll take part: a sidebar or chat panel that stays put never lines up with any shift
+            var cols = prev.movingColumns(to: next, rows: header..<content, scale: scale)
+            if cols.count < 8 { cols = prev.columns(scale: scale) }
             let th = max(16, Int(24 * scale))
             // The lowest textured strip of the content, looking up from the footer
             var top = content - th
@@ -404,6 +461,7 @@ enum ScrollCapture {
     struct Stitcher {
         private var parts: [(CGImage, Int)] = []   // a slice and its height
         private(set) var height = 0
+        var crop: Range<Int>?                      // columns kept, when only part of the width scrolls
 
         init(first: Frame) { parts = [(first.image, first.h)]; height = first.h }
 
@@ -422,12 +480,15 @@ enum ScrollCapture {
             height += rows.count
         }
 
-        func image(width w: Int) -> CGImage? {
+        func image(width full: Int) -> CGImage? {
+            let x0 = crop?.lowerBound ?? 0
+            let w = crop?.count ?? full
             guard let ctx = CGContext(data: nil, width: w, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
             var y = 0
             for (slice, rows) in parts {
-                ctx.draw(slice, in: CGRect(x: 0, y: height - y - rows, width: w, height: rows))   // CG draws bottom-up
+                let part = crop == nil ? slice : slice.cropping(to: CGRect(x: x0, y: 0, width: w, height: rows)) ?? slice
+                ctx.draw(part, in: CGRect(x: 0, y: height - y - rows, width: w, height: rows))   // CG draws bottom-up
                 y += rows
             }
             return ctx.makeImage()
