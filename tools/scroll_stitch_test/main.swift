@@ -17,7 +17,7 @@ final class PermissionGuide { static let shared = PermissionGuide(); func show()
 struct Page {
     let w: Int, hs: Int, view: Int, header: Int, footer: Int
     let source: CGImage, headerImg: CGImage?, footerImg: CGImage?
-    init(w: Int, hs: Int, view: Int, header: Int, footer: Int, blank: Range<Int>? = nil, seed: UInt64 = 7) {
+    init(w: Int, hs: Int, view: Int, header: Int, footer: Int, blank: Range<Int>? = nil, seed: UInt64 = 7, terminal: Int = 0) {
         self.w = w; self.hs = hs; self.view = view; self.header = header; self.footer = footer
         var rng = SplitMix(seed)
         func draw(_ width: Int, _ height: Int, _ body: (CGContext) -> Void) -> CGImage {
@@ -25,6 +25,26 @@ struct Page {
             body(c); return c.makeImage()!
         }
         source = draw(w, hs) { c in
+            if terminal > 0 {
+                // A terminal: dark, monospace-ish text on a fixed line grid, with many blank lines
+                c.setFillColor(CGColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: w, height: hs))
+                var line = 0
+                while (line + 1) * terminal <= hs {
+                    if rng.next() % 10 < 5 {
+                        var x = 16
+                        let words = 1 + Int(rng.next() % 8)
+                        for _ in 0..<words {
+                            let len = 8 + Int(rng.next() % 90)
+                            c.setFillColor(CGColor(red: 0.6 + Double(rng.next() % 40) / 100, green: 0.8, blue: 0.7, alpha: 1))
+                            c.fill(CGRect(x: x, y: hs - (line + 1) * terminal + 5, width: min(len, w - 20 - x), height: terminal - 10))
+                            x += len + 12
+                            if x > w - 40 { break }
+                        }
+                    }
+                    line += 1
+                }
+                return
+            }
             c.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: w, height: hs))
             var y = 10
             while y < hs - 10 {
@@ -133,6 +153,8 @@ extension ScrollCapture.Frame {
 }
 
 @main struct Harness2 { static func main() async {
+    let term = Page(w: 1000, hs: 3000, view: 800, header: 0, footer: 0, seed: 23, terminal: 20)
+    await check("terminal: whole lines only (asked 330, scrolls 320)", page: term, step: 330, actualStep: { _ in 320 })
     var wide = Page(w: 1400, hs: 3200, view: 800, header: 60, footer: 0, seed: 13); wide.sidebars = 450
     await check("feed between WIDE static sidebars (most of the width stays put)", page: wide, step: 320, actualStep: { _ in 320 })
     var video = Page(w: 1200, hs: 800, view: 800, header: 60, footer: 0, seed: 17); video.video = CGRect(x: 300, y: 200, width: 500, height: 300)

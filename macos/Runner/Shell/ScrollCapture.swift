@@ -539,25 +539,39 @@ enum ScrollCapture {
             }
             // Pages usually scroll exactly as asked: when the strips that are still in view agree on that (jointly
             // and most of them individually), take it, refined by a row or two
-            func joint(_ cand: Int) -> (mean: Int, good: Int, n: Int) {
+            func joint(_ cand: Int, only: [Int]? = nil) -> (mean: Int, good: Int, n: Int, goodStrips: [Int]) {
                 var total = 0, good = 0, n = 0
-                for strip in strips where strip - cand >= header {
+                var goodStrips: [Int] = []
+                for strip in only ?? strips where strip - cand >= header {
                     let sc = score(strip: strip, at: strip - cand)
                     total += sc; n += 1
-                    if sc <= 12 { good += 1 }
+                    if sc <= 12 { good += 1; goodStrips.append(strip) }
                 }
-                return (n == 0 ? Int.max : total / n, good, n)
+                return (n == 0 ? Int.max : total / n, good, n, goodStrips)
             }
             if expected > 1 {
-                var best = (d: expected, mean: Int.max, good: 0, n: 0)
-                for cand in [expected, expected - 1, expected + 1, expected - 2, expected + 2] where cand > 1 {   // nearest first: ties keep the ask
+                var best = (d: expected, mean: Int.max, good: 0, n: 0, goodStrips: [Int]())
+                for cand in [expected, expected - 1, expected + 1, expected - 2, expected + 2, expected - 3, expected + 3] where cand > 1 {   // nearest first: ties keep the ask
                     let j = joint(cand)
-                    if j.mean < best.mean { best = (cand, j.mean, j.good, j.n) }
+                    if j.mean < best.mean { best = (cand, j.mean, j.good, j.n, j.goodStrips) }
                 }
-                note("  strips \(strips) · at the ask \(expected): mean \(best.mean), \(best.good)/\(best.n) strips good")
                 // Most strips match there (a strip that changed meanwhile, like a photo that re-rendered or a
-                // tooltip, can pull the mean up without meaning anything), or all of them nearly do
-                if best.n > 0, (best.n >= 2 && best.good * 2 > best.n) || best.mean <= 16 { return .moved(best.d) }
+                // tooltip, can pull the mean up without meaning anything), or all of them nearly do…
+                let plausible = best.n > 0 && ((best.n >= 2 && best.good * 2 > best.n) || best.mean <= 16)
+                // …and it must beat the shifts a few rows away clearly: sparse content (a terminal, code, blank
+                // lines) scores "well enough" at a slightly wrong shift, which would put every seam off by a few rows
+                var distinct = false
+                if plausible {
+                    // Judged on the strips that match there (a changed strip is noise at every shift)
+                    let here = joint(best.d, only: best.goodStrips).mean
+                    let around = [best.d - 5, best.d + 5, best.d - 9, best.d + 9].filter { $0 > 1 }.map { joint($0, only: best.goodStrips).mean }
+                    // Clearly worse nearby: by 8, or by 40% (low-contrast content such as a photo of paper scores
+                    // low everywhere), and never on the strength of a near-blank strip
+                    distinct = !best.goodStrips.isEmpty && around.allSatisfy { $0 >= 4 && ($0 >= here + 8 || $0 * 10 >= here * 14) }
+                    note("  good strips \(best.goodStrips): here \(here), around ±5/±9 \(around)")
+                }
+                note("  strips \(strips) · at the ask \(expected): mean \(best.mean), \(best.good)/\(best.n) strips good, distinct \(distinct)")
+                if plausible && distinct { return .moved(best.d) }
             }
             // Otherwise each strip votes for its best shift (0…1.5× the ask); a strip whose match is ambiguous
             // (nearly as good somewhere else, as on a plain photo or blank paper) doesn't vote
