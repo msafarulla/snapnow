@@ -57,6 +57,10 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         }
         registerHotKeys()
         NotificationCenter.default.addObserver(self, selector: #selector(registerHotKeys), name: Shortcuts.changed, object: nil)
+        // Scripting hook: a distributed notification "com.mm.snaplite.scrollCapture" whose object is "x,y,w,h"
+        // (global Cocoa points) runs a scrolling capture of that area without the picker (automated tests).
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(scriptedScrollCapture(_:)),
+            name: Notification.Name("com.mm.snaplite.scrollCapture"), object: nil, suspensionBehavior: .deliverImmediately)
 
         ScreenPermission.checkAtLaunch()
         // A quiet look for a newer release once the app has settled; manual checks are in the menu.
@@ -84,6 +88,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             delayed.submenu?.addItem(entry)
         }
         menu.addItem(delayed)
+        menu.addItem(item("Capture Scrolling Area", #selector(captureScrolling), shortcut: .scroll))
         menu.addItem(item("Copy Text…", #selector(grabText), shortcut: .text))
         menu.addItem(item("Record Screen…", #selector(startRecordingFromMenu), shortcut: .record))
         menu.addItem(ScheduledCapture.shared.menuItem())
@@ -273,6 +278,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     func perform(_ action: ShortcutAction) {
         switch action {
         case .region: captureRegion()
+        case .scroll: captureScrolling()
         case .window: afterDelay { $0.capture(.window) }
         case .screen: afterDelay { $0.capture(.screen) }
         case .text: afterDelay { $0.grabText() }
@@ -287,6 +293,25 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     @objc private func captureRegion() {
         let config = CaptureConfig.current
         capture(.region, delay: config.delayOn ? config.delaySeconds : 0)
+    }
+    /// Pick an area over something that scrolls; SnapNow scrolls it, shoots as it goes and stitches one tall image.
+    @objc private func captureScrolling() { scrollCapture(area: nil) }
+
+    @objc private func scriptedScrollCapture(_ n: Notification) {
+        ScrollCapture.note("scripted request \(String(describing: n.object)) busy=\(busy)")
+        guard let spec = n.object as? String else { return }
+        let v = spec.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard v.count == 4 else { return }
+        scrollCapture(area: CGRect(x: v[0], y: v[1], width: v[2], height: v[3]))
+    }
+
+    private func scrollCapture(area: CGRect?) {
+        guard !busy, !recorder.isRecording, hasPermission() else { ScrollCapture.note("not started: busy \(busy), recording \(recorder.isRecording)"); return }
+        busy = true
+        ScrollCapture.start(area: area, sound: CaptureConfig.current.captureSound) { [weak self] url in
+            self?.busy = false
+            if let url { self?.handleCapture(url) }
+        }
     }
     @objc private func captureWindow() { afterDelay { $0.capture(.window) } }
     @objc private func captureScreen() { afterDelay { $0.capture(.screen) } }

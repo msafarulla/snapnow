@@ -81,11 +81,12 @@ struct Shortcut: Codable, Equatable {
 
 /// The global shortcuts, configurable in Settings › Shortcuts.
 enum ShortcutAction: String, CaseIterable {
-    case region, window, screen, text, record, library
+    case region, scroll, window, screen, text, record, library
 
     var label: String {
         switch self {
         case .region: return "Capture region (Space: window)"
+        case .scroll: return "Capture scrolling area"
         case .window: return "Capture window"
         case .screen: return "Capture full screen"
         case .text: return "Copy text"
@@ -98,6 +99,7 @@ enum ShortcutAction: String, CaseIterable {
         let key: Int
         switch self {
         case .region: key = kVK_ANSI_C
+        case .scroll: key = kVK_ANSI_S
         case .window: key = kVK_ANSI_W
         case .screen: key = kVK_ANSI_F
         case .text: key = kVK_ANSI_T

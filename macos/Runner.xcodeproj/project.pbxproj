@@ -39,6 +39,7 @@
 		A1B2C3D4E5F60718293A4B5C /* RegionCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* RegionCapture.swift */; };
 		C3D4E5F60718293A4B5C6D7E /* PermissionGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* PermissionGuide.swift */; };
 		E5F60718293A4B5C6D7E8F90 /* ScheduledCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9001 /* ScheduledCapture.swift */; };
+		E5F60718293A4B5C6D7E8F91 /* ScrollCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9002 /* ScrollCapture.swift */; };
 		F297BEA40E04CD9CB10620D7 /* Settings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFFF8DB11849F34AADF8740 /* Settings.swift */; };
 		FABC08C8A3F3875D0D29395A /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2687F82B7151B7951B9F22C /* Pods_Runner.framework */; };
 /* End PBXBuildFile section */
@@ -81,6 +82,7 @@
 		B2C3D4E5F60718293A4B5C6D /* RegionCapture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RegionCapture.swift; sourceTree = "<group>"; };
 		D4E5F60718293A4B5C6D7E8F /* PermissionGuide.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PermissionGuide.swift; sourceTree = "<group>"; };
 		F60718293A4B5C6D7E8F9001 /* ScheduledCapture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScheduledCapture.swift; sourceTree = "<group>"; };
+		F60718293A4B5C6D7E8F9002 /* ScrollCapture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScrollCapture.swift; sourceTree = "<group>"; };
 		30D3A7BBE111759D3999CE8A /* Pods-RunnerTests.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.profile.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.profile.xcconfig"; sourceTree = "<group>"; };
 		331C80D5294CF71000263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		331C80D7294CF71000263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
@@ -232,6 +234,7 @@
 				B2C3D4E5F60718293A4B5C6D /* RegionCapture.swift */,
 				D4E5F60718293A4B5C6D7E8F /* PermissionGuide.swift */,
 				F60718293A4B5C6D7E8F9001 /* ScheduledCapture.swift */,
+				F60718293A4B5C6D7E8F9002 /* ScrollCapture.swift */,
 				BF63A596BC87ACCF415755D2 /* CapturePanel.swift */,
 				50F51C57FB6403EA2C829730 /* HotKeys.swift */,
 				DDFFF8DB11849F34AADF8740 /* Settings.swift */,
@@ -490,6 +493,7 @@
 				A1B2C3D4E5F60718293A4B5C /* RegionCapture.swift in Sources */,
 				C3D4E5F60718293A4B5C6D7E /* PermissionGuide.swift in Sources */,
 				E5F60718293A4B5C6D7E8F90 /* ScheduledCapture.swift in Sources */,
+				E5F60718293A4B5C6D7E8F91 /* ScrollCapture.swift in Sources */,
 				80718055762119BBD8DE8439 /* CapturePanel.swift in Sources */,
 				18837B033D5B2A30E72D6C6D /* HotKeys.swift in Sources */,
 				F297BEA40E04CD9CB10620D7 /* Settings.swift in Sources */,

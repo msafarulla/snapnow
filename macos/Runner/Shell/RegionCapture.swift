@@ -19,6 +19,7 @@ final class RegionCapture {
     private var overlays: [NSWindow] = []
     private var views: [RegionView] = []
     private var completion: ((URL?) -> Void)?
+    private var onPicked: ((CGRect, NSScreen) -> Void)?   // pick mode: hand back the area instead of saving it
     private var url: URL!
     private var sound = false
     private var previousApp: NSRunningApplication?   // where Esc returns to
@@ -47,6 +48,24 @@ final class RegionCapture {
         Task { @MainActor in
             // ScreenCaptureKit runs in SnapNow itself, so it has SnapNow's Screen Recording permission (a
             // screencapture child process came back empty on macOS 27); screencapture is the backup.
+            let ok = await capture.freezeWithScreenCaptureKit() || capture.freeze()
+            guard ok, current === capture else { if current === capture { current = nil }; fallback(); return }
+            capture.snapshotWindows()
+            capture.show()
+        }
+    }
+
+    /// The picker alone: the chosen area (global Cocoa coordinates) and its screen go to `completion`, nothing is
+    /// saved; Esc gives (nil, nil). For captures that then do their own shooting (scrolling capture).
+    static func pick(completion: @escaping (CGRect?, NSScreen?) -> Void, fallback: @escaping () -> Void) {
+        current?.finish(nil)
+        let capture = RegionCapture()
+        capture.completion = { _ in completion(nil, nil) }   // only ever reached with nil: Esc or a failure
+        capture.onPicked = { r, screen in completion(r, screen) }
+        let front = NSWorkspace.shared.frontmostApplication
+        capture.previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
+        current = capture
+        Task { @MainActor in
             let ok = await capture.freezeWithScreenCaptureKit() || capture.freeze()
             guard ok, current === capture else { if current === capture { current = nil }; fallback(); return }
             capture.snapshotWindows()
@@ -231,6 +250,15 @@ final class RegionCapture {
 
     /// Captures the picked area: straight from the frozen screen, or after the countdown from the live one.
     private func take(_ r: CGRect, from f: Frozen) {
+        if let picked = onPicked {
+            UserDefaults.standard.set(NSStringFromRect(r), forKey: Self.lastKey)
+            closeOverlays()
+            completion = nil
+            onPicked = nil
+            RegionCapture.current = nil
+            picked(r, f.screen)
+            return
+        }
         guard delay > 0 else { finish(save(r, from: f) ? remember(r) : nil); return }
         closeOverlays()
         outline = Self.showOutline(r)
@@ -259,7 +287,7 @@ final class RegionCapture {
     }
 
     /// The picked area outlined on the live screen during the countdown: click-through, never captured.
-    private static func showOutline(_ r: CGRect) -> NSWindow {
+    static func showOutline(_ r: CGRect) -> NSWindow {
         let pad: CGFloat = 3
         let w = NSPanel(contentRect: r.insetBy(dx: -pad, dy: -pad), styleMask: [.borderless, .nonactivatingPanel],
                         backing: .buffered, defer: false)

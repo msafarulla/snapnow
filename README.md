@@ -42,6 +42,7 @@ Click the menu bar icon for the capture panel, or right-click it for the full me
 | | Default shortcut |
 |---|---|
 | Capture an area (or click a window) | ⌃⇧C |
+| Capture a scrolling area (a whole web page) | ⌃⇧S |
 | Capture a window | ⌃⇧W |
 | Capture the full screen | ⌃⇧F |
 | Copy text from an area | ⌃⇧T |
@@ -83,6 +84,15 @@ so a series of identical captures is ⌃⇧C, Enter, ⌃⇧C, Enter.
 
 This needs **Screen Recording** permission (see [Install](#macos)). Without it, SnapNow uses the plain macOS
 crosshair instead (Space switches it to picking a window), so capturing still works.
+
+### Scrolling capture
+
+⌃⇧S (or **Capture Scrolling Area** in the menu) captures more than fits on the screen: drag over the part of a
+web page, document or chat that scrolls, and SnapNow scrolls it for you, shooting as it goes, and stitches the
+shots into one tall image that opens in the editor. It stops by itself at the end of the page; move the mouse to
+stop it earlier and keep what it has. Bars that stay put while the rest scrolls (a sticky header, the footer)
+appear once, where they belong. Pages that keep changing while they scroll (animations, content that loads as
+you go) can confuse the alignment; SnapNow then says so and keeps what it had.
 
 ## Mark it up
 
@@ -385,7 +395,7 @@ The release appears only once the builds are attached, so don't create it by han
 - Signed, notarized releases
 - Windows and Linux with the full feature set (capture, recording, Copy Text, notifications), once I have
   machines of each to develop and test on
-- Scrolling capture, auto-redact, search captures by their text
+- Auto-redact, search captures by their text
 
 ## License
 
