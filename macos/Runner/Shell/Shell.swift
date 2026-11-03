@@ -346,10 +346,9 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             statusItem.menu = menu            // attach just long enough to show it
             statusItem.button?.performClick(nil)
             statusItem.menu = nil
-        } else if popover.isShown, popover.contentViewController?.view.window?.isVisible == true {
+        } else if popover.isShown {
             popover.performClose(nil)
         } else if let button = statusItem.button {
-            if popover.isShown { popover.performClose(nil) }   // thinks it's open but nothing shows: start over
             panel.reload()
             popover.appearance = Theme.appearance
             // Active first: over another app's full-screen Space the popover otherwise lands on the desktop Space
