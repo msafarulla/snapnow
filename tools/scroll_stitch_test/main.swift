@@ -52,6 +52,9 @@ struct Page {
     var lazy: Int = 0
     /// A paged view: smooth scrolling does nothing, a wheel tick shows the next page (the content under the header).
     var paged = false
+    /// A video playing in a page that doesn't scroll: this box (CG coords in the view) shows noise every shot.
+    var video: CGRect?
+    var shotCounter = 0
     func paintSides(_ c: CGContext, height: Int) {
         guard sidebars > 0 else { return }
         for x in [0, w - sidebars] {
@@ -65,6 +68,10 @@ struct Page {
         let slice = source.cropping(to: CGRect(x: 0, y: off, width: w, height: view))!
         c.draw(slice, in: CGRect(x: 0, y: 0, width: w, height: view))
         paintSides(c, height: view)
+        if let v = video {
+            var rng = SplitMix(UInt64(off) &* 7919 &+ UInt64(Date().timeIntervalSince1970 * 1000))
+            for i in 0..<40 { c.setFillColor(CGColor(gray: Double(rng.next() % 255) / 255, alpha: 1)); c.fill(CGRect(x: v.minX + CGFloat(i % 8) * v.width / 8, y: v.minY + CGFloat(i / 8) * v.height / 5, width: v.width / 8, height: v.height / 5)) }
+        }
         if lazy > 0 && off < maxOffset {   // placeholders along the bottom (CG is bottom-up: y 0 is the view's bottom)
             c.setFillColor(CGColor(red: 0.85, green: 0.85, blue: 0.85, alpha: 1))
             c.fill(CGRect(x: sidebars + 20, y: 0, width: w - 2 * sidebars - 40, height: lazy))
@@ -105,7 +112,8 @@ func check(_ name: String, page: Page, step: Int, actualStep: (Int) -> Int) asyn
     if got.h == want.h {
         // Compared column by column (the stitched picture may be cropped to the scrolling columns)
         // (a cropped picture keeps a little of the static sides as padding; only the scrolling columns are compared)
-        let cols = (0..<got.w).filter { x0 + $0 >= page.sidebars && x0 + $0 < page.w - page.sidebars }
+        var cols = (0..<got.w).filter { x0 + $0 >= page.sidebars && x0 + $0 < page.w - page.sidebars }
+        if let v = page.video { cols = cols.filter { CGFloat(x0 + $0) < v.minX || CGFloat(x0 + $0) >= v.maxX } }
         for y in 0..<got.h where got.rowDiff(y, want, y, cols: cols, offset: x0) > 2 { bad += 1 }
     }
     let widthOK = page.sidebars == 0 ? got.w == page.w : (got.w < page.w - page.sidebars && got.w >= page.w - 2 * page.sidebars - 1)
@@ -125,6 +133,10 @@ extension ScrollCapture.Frame {
 }
 
 @main struct Harness2 { static func main() async {
+    var wide = Page(w: 1400, hs: 3200, view: 800, header: 60, footer: 0, seed: 13); wide.sidebars = 450
+    await check("feed between WIDE static sidebars (most of the width stays put)", page: wide, step: 320, actualStep: { _ in 320 })
+    var video = Page(w: 1200, hs: 800, view: 800, header: 60, footer: 0, seed: 17); video.video = CGRect(x: 300, y: 200, width: 500, height: 300)
+    await check("a video playing in a page that doesn't scroll", page: video, step: 320, actualStep: { _ in 0 })
     var shorts = Page(w: 900, hs: 60 + 5 * 640, view: 700, header: 60, footer: 0, seed: 21); shorts.paged = true
     await check("paged view (Shorts): a wheel tick per page", page: shorts, step: 280, actualStep: { _ in 0 })
     var lazyFeed = Page(w: 1200, hs: 3200, view: 800, header: 60, footer: 0, seed: 5); lazyFeed.sidebars = 300; lazyFeed.lazy = 220

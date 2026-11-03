@@ -226,7 +226,8 @@ enum ScrollCapture {
                 previous = next
                 continue
             }
-            let shift = Frame.displacement(from: previous, to: next, header: header, content: content, scale: scale, expected: step)
+            let shift = Frame.displacement(from: previous, to: next, header: header, content: content, scale: scale,
+                                           expected: ticked ? max(8, step / 6) : step)
             note("shot \(frames): header \(header), footer \(footer), shift \(shift)\(ticked ? " (after a wheel tick)" : "")")
             var d: Int
             switch shift {
@@ -263,7 +264,7 @@ enum ScrollCapture {
                     // Pixel scrolling did nothing and a wheel tick changed most of the view: a paged view. The
                     // first view stays whole; this and every further tick add a page.
                     let moving = previous.movingColumns(to: next, rows: header..<content, scale: scale)
-                    if moving.count >= previous.columns(scale: scale).count / 4 {
+                    if moving.count * 10 >= previous.columns(scale: scale).count * 6 {
                         paged = true
                         stalls = 0
                         stitcher.append(next, rows: header..<content)
@@ -295,7 +296,7 @@ enum ScrollCapture {
         if frames >= maxFrames || stitcher.height >= maxHeight { reason = "reached the size limit" }
         if reason.isEmpty, pending == nil, !paged, frames >= 2 { reason = "found nothing that scrolls under the cursor" }
         if let p = pending { stitcher.append(p.frame, rows: p.rows) }       // the last view's bottom, as it is
-        if footer > 0 { stitcher.append(previous, rows: (h - footer)..<h) }   // the sticky footer, once
+        if footer > 0, pending != nil || paged { stitcher.append(previous, rows: (h - footer)..<h) }   // the sticky footer, once
         return (stitcher, frames, reason)
     }
 
@@ -503,19 +504,19 @@ enum ScrollCapture {
             let all = prev.columns(scale: scale)
             var cols = prev.movingColumns(to: next, rows: header..<content, scale: scale)
             let th = max(16, Int(24 * scale))
-            // Most of the width unchanged, and that part has content: the page stayed put and something inside it
-            // (a video, an animation) is what changed. Scrolling would have moved everything.
-            if cols.count < all.count / 2 {
+            // When the moving columns can't be aligned: most of the width unchanged, with content, means the page
+            // stayed put and something inside it (a video, an animation) is what changed
+            func stayedPut() -> Bool {
+                guard cols.count < all.count / 2 else { return false }
                 let still = all.filter { !cols.contains($0) }
-                if prev.textured(columns: still, rows: header..<content) {
-                    var total = 0, n = 0
-                    for y in stride(from: header, to: content, by: 5) { total += prev.rowDiff(y, next, y, cols: still); n += 1 }
-                    if n > 0, total / n <= 4 { return .still }
-                }
+                guard prev.textured(columns: still, rows: header..<content) else { return false }
+                var total = 0, n = 0
+                for y in stride(from: header, to: content, by: 5) { total += prev.rowDiff(y, next, y, cols: still); n += 1 }
+                return n > 0 && total / n <= 4
             }
             if cols.count < 8 { cols = all }
             let span = content - header
-            guard span > th * 2 else { return .flat }
+            guard span > th * 2 else { return stayedPut() ? .still : .flat }
             // Textured strips, from the bottom up, spread through the content
             var strips: [Int] = []
             var t = content - th
@@ -526,7 +527,7 @@ enum ScrollCapture {
                 if probe >= header, prev.textured(probe..<(probe + th), cols: cols) { strips.append(probe) }
                 t -= gap
             }
-            guard !strips.isEmpty else { return .flat }
+            guard !strips.isEmpty else { return stayedPut() ? .still : .flat }
 
             func score(strip: Int, at y: Int) -> Int {   // mean diff of prev's strip vs next at row y
                 var total = 0, rows = 0
@@ -573,6 +574,7 @@ enum ScrollCapture {
             }
             note("  votes \(votes.map { "\($0.d)@\($0.s)" })")
             if votes.isEmpty {
+                if stayedPut() { return .still }
                 // Nothing found: if the ask carries the lowest strip off the top, what scrolled in below was blank
                 return strips[0] - expected < header ? .flat : .unsure
             }
@@ -584,7 +586,7 @@ enum ScrollCapture {
             }
             let agreed = votes.filter { abs($0.d - bestD) <= 2 }
             // Alone against others, with no agreement: too risky to append on
-            if agreed.count < 2, votes.count >= 2 { return .unsure }
+            if agreed.count < 2, votes.count >= 2 { return stayedPut() ? .still : .unsure }
             // The exact row: the agreeing strips scored together over the few candidates around their shift
             var d = bestD, bestJoint = Int.max
             for cand in (bestD - 2)...(bestD + 2) where cand >= 0 {
