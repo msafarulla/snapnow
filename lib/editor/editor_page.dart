@@ -304,9 +304,33 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   bool get _toolbarLeft => toolbarLeft.value;
   bool _inspectorShown = true; // the properties card on the right (Settings persist it as inspector.hidden)
 
-  void _toggleToolbarSide() {
-    setState(() => toolbarLeft.value = !toolbarLeft.value);
-    Native.setBool('toolbar.left', toolbarLeft.value);
+  void _toggleToolbarSide() => _setToolbarLeft(!toolbarLeft.value);
+
+  void _setToolbarLeft(bool left) {
+    if (left == toolbarLeft.value) return;
+    setState(() => toolbarLeft.value = left);
+    Native.setBool('toolbar.left', left);
+  }
+
+  // ---- Dragging the toolbar to another edge (by its grip) ----
+  final _chromeKey = GlobalKey(); // the Stack the floating cards sit in: the drag's coordinate space
+  Offset? _toolbarDragAt; // the pointer, in that Stack, while the grip is being dragged
+  bool? _toolbarDropLeft; // the dock under the pointer: true = left edge, false = top, null = neither
+  static const _dockReach = 160.0; // how close to an edge the pointer must come to dock there
+
+  void _toolbarDragTo(Offset global) {
+    final box = _chromeKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final p = box.globalToLocal(global);
+    // Nearer the left edge than the top, and close to it → left; close to the top → top; else nowhere
+    final bool? dock = p.dx < _dockReach && p.dx < p.dy ? true : p.dy < _dockReach ? false : null;
+    setState(() { _toolbarDragAt = p; _toolbarDropLeft = dock; });
+  }
+
+  void _toolbarDragEnd() {
+    final dock = _toolbarDropLeft;
+    setState(() { _toolbarDragAt = null; _toolbarDropLeft = null; });
+    if (dock != null) _setToolbarLeft(dock);
   }
 
   /// The toolbar card's right-click menu: move it to the other edge.
@@ -2352,15 +2376,18 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     final chrome = SnapChrome.of(context);
     const m = _chromeMargin;
     final inspectorRoom = _inspectorShown ? PropertiesPanel.width + m : 0.0;
+    final dragging = _toolbarDragAt != null;
+    final primary = Theme.of(context).colorScheme.primary;
+    // The toolbar's dock: the strip down the left edge, or across the top of what the inspector leaves free
+    Positioned dock(bool left, Widget child) => left
+        ? Positioned(top: m, left: m, bottom: m + widget.chromeInsets.bottom, width: _toolbarLeftWidth, child: child)
+        : Positioned(top: m, left: m, right: m + inspectorRoom, height: _toolbarHeight, child: child);
     return Scaffold(
       backgroundColor: chrome.backdrop,
-      body: Stack(children: [
+      body: LayoutBuilder(builder: (context, c) => Stack(key: _chromeKey, children: [
         Positioned.fill(child: state == null ? const Center(child: CircularProgressIndicator()) : _canvasArea(state)),
-        // The toolbar: centred over the part of the canvas the inspector leaves free, or down the left edge
-        if (_toolbarLeft)
-          Positioned(top: m, left: m, bottom: m + widget.chromeInsets.bottom, width: _toolbarLeftWidth, child: Center(child: _toolbar()))
-        else
-          Positioned(top: m, left: m, right: m + inspectorRoom, height: _toolbarHeight, child: Center(child: _toolbar())),
+        // The toolbar card, centred in its dock; dimmed while its grip is being dragged
+        dock(_toolbarLeft, Opacity(opacity: dragging ? 0.35 : 1, child: Center(child: _toolbar()))),
         if (_inspectorShown)
           Positioned(
             top: m,
@@ -2368,7 +2395,34 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             bottom: m + widget.chromeInsets.bottom,
             child: PropertiesPanel(host: this, onClose: _toggleInspector),
           ),
-      ]),
+        if (_toolbarDragAt case final at?) ...[
+          // The dock the drop would land in, lit up
+          if (_toolbarDropLeft case final left?)
+            dock(left, IgnorePointer(child: Container(decoration: BoxDecoration(
+              color: primary.withValues(alpha: 0.12),
+              border: Border.all(color: primary.withValues(alpha: 0.7)),
+              borderRadius: BorderRadius.circular(14),
+            )))),
+          // A ghost of the card follows the pointer, already turned the way the dock under it would hold it.
+          // Along its own axis it slides with the pointer but stays inside the window (aligned in proportion).
+          if (_toolbarDropLeft ?? _toolbarLeft)
+            Positioned(
+              left: at.dx - 12, top: m, bottom: m + widget.chromeInsets.bottom,
+              child: IgnorePointer(child: Align(
+                alignment: Alignment(-1, (at.dy / math.max(1, c.maxHeight)).clamp(0, 1) * 2 - 1),
+                child: Opacity(opacity: 0.9, child: _toolbar(vertical: true, ghost: true)),
+              )),
+            )
+          else
+            Positioned(
+              top: at.dy - 12, left: m, right: m + inspectorRoom,
+              child: IgnorePointer(child: Align(
+                alignment: Alignment((at.dx / math.max(1, c.maxWidth)).clamp(0, 1) * 2 - 1, -1),
+                child: Opacity(opacity: 0.9, child: _toolbar(vertical: false, ghost: true)),
+              )),
+            ),
+        ],
+      ])),
     );
   }
 
@@ -2919,7 +2973,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Tool.crop: (Icons.crop, 'Crop'),
   };
 
-  Widget _toolbar() {
+  /// [ghost]: the copy that follows the pointer while the grip is dragged (no GlobalKey, so the real one keeps it).
+  Widget _toolbar({bool? vertical, bool ghost = false}) {
     // Every tool can appear: the preferred ones (Settings visibility) come first, then the rest. The toolbar
     // fits as many as the width allows and only the overflow goes into "More" — so a wider window shows more
     // tools, not a half-empty bar with a needless More button.
@@ -2968,7 +3023,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       _ToolButton(icon: Icons.undo, label: 'Undo', onTap: _undo.isEmpty ? null : _undoAction),
       _ToolButton(icon: Icons.redo, label: 'Redo', onTap: _redo.isEmpty ? null : _redoAction),
       _ToolbarGap(vertical: _toolbarLeft),
-      if (Platform.isMacOS) KeyedSubtree(key: _shareKey, child: _ToolButton(icon: Icons.ios_share, label: 'Share', onTap: share)),
+      if (Platform.isMacOS) KeyedSubtree(key: ghost ? null : _shareKey, child: _ToolButton(icon: Icons.ios_share, label: 'Share', onTap: share)),
       if (!Platform.isMacOS) ...[
         _ToolButton(icon: Icons.content_copy, label: 'Copy', onTap: _copyImage),
         _ToolButton(icon: Icons.save_outlined, label: 'Save', onTap: save, primary: hasUnsavedChanges),
@@ -2983,12 +3038,13 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     ];
     final fixedButtons = trailing.where((w) => w is! _ToolbarGap).length + (leading != null ? 1 : 0);
     final fixedGaps = 2 + (leading != null ? 1 : 0); // leading | tools | undo/redo | share
-    final vertical = _toolbarLeft;
+    final down = vertical ?? _toolbarLeft; // the card as a column down the left edge
     return LayoutBuilder(builder: (context, c) {
+      final vertical = down;
       // per-button footprint along the bar; More only when something overflows
       final toolW = (vertical ? _ToolButton.height : _ToolButton.width) + 2, moreW = toolW;
       final room = (vertical ? c.maxHeight : c.maxWidth) - _ToolbarCard.padding * 2 - _ToolbarCard.border * 2 -
-          fixedButtons * toolW - fixedGaps * _ToolbarGap.width;
+          _ToolbarGrip.extent - fixedButtons * toolW - fixedGaps * _ToolbarGap.width;
       final int n; // how many items show as buttons
       if (items.length * toolW <= room) {
         n = items.length; // everything fits: no More
@@ -2999,6 +3055,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final hidden = items.sublist(n);
       final moreActive = hidden.any((i) => i.$1 == barTool.name);
       return GestureDetector(onSecondaryTapUp: (d) => _showToolbarMenu(d.globalPosition), child: _ToolbarCard(vertical: vertical, children: [
+        _ToolbarGrip(vertical: vertical, onDrag: _toolbarDragTo, onDrop: _toolbarDragEnd),
         if (leading != null) ...[leading, _ToolbarGap(vertical: vertical)],
         for (final i in shown)
           _ToolButton(icon: i.$2, label: i.$3, active: i.$1 == barTool.name, onTap: () => run(i.$1)),
@@ -3036,6 +3093,40 @@ class _ToolbarCard extends StatelessWidget {
             ? Column(mainAxisSize: MainAxisSize.min, children: children)
             : Row(mainAxisSize: MainAxisSize.min, children: children),
       );
+}
+
+/// The grip at the start of the toolbar: drag it to the top or the left edge of the window to dock the
+/// toolbar there (the editor lights up the dock under the pointer and moves the card on release).
+class _ToolbarGrip extends StatelessWidget {
+  static const extent = 18.0; // along the bar
+  static const tooltip = 'Drag to the top or the left edge';
+  final bool vertical;
+  final ValueChanged<Offset> onDrag; // the pointer's global position, from the first move on
+  final VoidCallback onDrop;
+  const _ToolbarGrip({required this.vertical, required this.onDrag, required this.onDrop});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.55);
+    return MouseRegion(
+      cursor: SystemMouseCursors.grab,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (d) => onDrag(d.globalPosition),
+        onPanUpdate: (d) => onDrag(d.globalPosition),
+        onPanEnd: (_) => onDrop(),
+        onPanCancel: onDrop,
+        child: Tooltip(
+          message: tooltip,
+          child: SizedBox(
+            width: vertical ? _ToolButton.width : extent,
+            height: vertical ? extent : _ToolButton.height,
+            child: RotatedBox(quarterTurns: vertical ? 1 : 0, child: Icon(Icons.drag_indicator, size: 16, color: color)),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// A hairline between toolbar groups (its footprint along the bar is [width] either way).

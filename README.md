@@ -113,8 +113,10 @@ you go) can confuse the alignment; SnapNow then says so and keeps what it had.
 | Crop | C | |
 | Copy Text | G | Copies all text in the image. |
 
-The toolbar runs across the top by default. **View › Move Toolbar to Left** (or right-click the toolbar)
-stands it down the left edge instead, which suits wide screens; the choice is remembered.
+The toolbar runs across the top by default. Drag it by the grip at its start (⠿) towards the left edge and
+it stands down the left side instead, which suits wide screens; drag it back up to the top. The edge that
+would take it lights up while you drag. **View › Move Toolbar to Left/Top** and the toolbar's right-click
+menu do the same, and the choice is remembered.
 
 <img align="right" src="docs/screenshots/arrow-options.png" alt="Arrow options: ten head types, head size, line patterns, tapered, outline, shadow" width="250">
 
