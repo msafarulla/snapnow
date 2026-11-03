@@ -141,7 +141,7 @@ enum ScrollCapture {
         let result = await stitch(first: first, scale: scale, step: Int(CGFloat(stepPoints) * scale),
                                   next: { await settled() }, scroll: { kind in
                                       switch kind {
-                                      case .pixels(let px): scroll(by: Int((CGFloat(px) / scale).rounded()), at: centre)
+                                      case .pixels(let px, let chunked): scroll(by: Int((CGFloat(px) / scale).rounded()), at: centre, chunked: chunked)
                                       case .tick: tick(at: centre)
                                       }
                                   },
@@ -173,7 +173,7 @@ enum ScrollCapture {
     /// ("" = the end of the page, "stopped" = the user, otherwise a problem to tell the user about).
     /// How the engine asks for movement: smooth scrolling by so many image pixels (negative = back up), or a
     /// wheel tick (paged views like Shorts).
-    enum ScrollKind { case pixels(Int), tick }
+    enum ScrollKind { case pixels(Int, chunked: Bool), tick }
 
     /// `step`: the movement wanted per scroll, in image pixels. Apps turn the same scroll event into very
     /// different distances (a browser moves by what it's told, a terminal by whole lines, some views by several
@@ -214,15 +214,18 @@ enum ScrollCapture {
             if retried {
                 try? await Task.sleep(nanoseconds: 400_000_000)   // a retry shoots again without scrolling
             } else {
-                ticked = paged || stalls > 0
-                scroll(ticked ? .tick : .pixels(ask))
+                // A stall: once more with a smaller smooth scroll (a view may ignore a big one), then a wheel
+                // tick (a paged view), and only then the end
+                ticked = paged || stalls >= 2
+                scroll(ticked ? .tick : .pixels(stalls == 1 ? max(8, ask / 2) : ask, chunked: stalls == 1))
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
             guard let next = await shoot() else { reason = "lost a shot"; break }
             frames += 1
             if next.same(as: previous) {                     // nothing moved at all: the end, or not scrollable
                 stalls += 1
-                if stalls >= 2 { break }
+                note("shot \(frames): no change (stall \(stalls))")
+                if stalls >= 3 { break }
                 continue
             }
             if frames == 2 || (header == 0 && footer == 0) {
@@ -232,7 +235,7 @@ enum ScrollCapture {
             let content = h - footer
             if paged {                                        // every tick is the next page, kept whole
                 let moving = previous.movingColumns(to: next, rows: header..<content, scale: scale)
-                if moving.count < previous.columns(scale: scale).count / 4 { stalls += 1; if stalls >= 2 { break }; continue }
+                if moving.count < previous.columns(scale: scale).count / 4 { stalls += 1; if stalls >= 3 { break }; continue }
                 stalls = 0
                 stitcher.append(next, rows: header..<content)
                 note("shot \(frames): page \(stitcher.height / max(1, content - header))")
@@ -252,7 +255,7 @@ enum ScrollCapture {
                     // What this app does with a scroll, and the ask that should land near the wanted step
                     let measured = Double(moved) / Double(ask)
                     gain = gain == 1.0 && frames == 2 ? measured : gain * 0.5 + measured * 0.5
-                    ask = min(max(8, Int(Double(step) / max(0.05, gain))), content - header - th(scale) * 2)
+                    ask = min(max(8, Int(Double(step) / max(0.05, gain))), (content - header) * 6 / 10)
                     note("  gain \(String(format: "%.2f", gain)), next ask \(ask) px")
                 }
                 if !cropDecided {
@@ -273,7 +276,7 @@ enum ScrollCapture {
                 }
             case .still:                                      // the content stayed; only something else changed
                 stalls += 1
-                if stalls >= 2 { break loop }
+                if stalls >= 3 { break loop }
                 continue
             case .flat:                                       // nothing to align on (a blank stretch): take the scroll as sent
                 assumedRuns += 1
@@ -301,7 +304,7 @@ enum ScrollCapture {
                 if !ticked, halvings < 4, ask > 8 {
                     // Most likely the scroll moved the content past any overlap (apps that scroll several times
                     // what they're asked): back up by the same amount and try a smaller ask
-                    scroll(.pixels(-ask))
+                    scroll(.pixels(-ask, chunked: false))
                     try? await Task.sleep(nanoseconds: 300_000_000)
                     let back = await shoot()
                     note("shot \(frames): backing up \(ask) px: same \(back?.same(as: previous) ?? false), common rows \(back.map { Frame.commonRows(previous, $0, fromTop: true, limit: h) } ?? -1) of \(h)")
@@ -379,12 +382,31 @@ enum ScrollCapture {
         event.post(tap: .cghidEventTap)
     }
 
-    /// One continuous (trackpad-style) scroll of `points` down, delivered to whatever is under `at`.
-    private static func scroll(by points: Int, at: CGPoint) {
-        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(-points), wheel2: 0, wheel3: 0) else { return }
-        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        event.location = cg(at)
-        event.post(tap: .cghidEventTap)
+    /// A continuous (trackpad-style) scroll of `points` down (negative: up), delivered to whatever is under `at`.
+    /// One event normally (browsers apply it at once); `chunked` sends it as a gesture of ≤80-point pieces with
+    /// scroll phases, for views that ignore one big event (tried when a scroll did nothing).
+    private static func scroll(by points: Int, at: CGPoint, chunked: Bool) {
+        func post(_ delta: Int, phase: Int64?) {
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(-delta), wheel2: 0, wheel3: 0) else { return }
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            if let phase {
+                event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)      // 1 began, 2 changed, 4 ended
+                event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)
+            }
+            event.location = cg(at)
+            event.post(tap: .cghidEventTap)
+        }
+        guard chunked else { post(points, phase: nil); return }
+        var left = points
+        let sign = left < 0 ? -1 : 1
+        post(0, phase: 1)
+        while left != 0 {
+            let chunk = sign * min(80, abs(left))
+            post(chunk, phase: 2)
+            left -= chunk
+            usleep(12_000)
+        }
+        post(0, phase: 4)
     }
 
     // MARK: Frames and matching

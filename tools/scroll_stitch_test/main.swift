@@ -120,7 +120,7 @@ func check(_ name: String, page: Page, step: Int, actualStep: (Int) -> Int) asyn
         next: { page.frame(at: off) },
         scroll: { kind in
             switch (kind, page.paged) {
-            case (.pixels(let ask), false): off = min(page.maxOffset, max(0, off + actualStep(ask)))
+            case (.pixels(let ask, _), false): off = min(page.maxOffset, max(0, off + actualStep(ask)))
             case (.tick, false): off = min(page.maxOffset, off + 30)            // a notch: three lines
             case (.pixels, true): break                                          // ignored by a paged view
             case (.tick, true): off = min(page.maxOffset, off + page.view - page.header)
