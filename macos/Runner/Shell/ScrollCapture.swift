@@ -155,7 +155,10 @@ enum ScrollCapture {
         if sound {
             NSSound(contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif", byReference: true)?.play()
         }
-        if !reason.isEmpty && reason != "stopped" {
+        if reason.hasPrefix("found nothing") {
+            Toast.show("Nothing scrolled under the cursor", symbol: "exclamationmark.triangle.fill",
+                       detail: "Kept a single shot. A video player or a paged view (Shorts, Reels) doesn't scroll; try the page around it, or drag just the part that scrolls.")
+        } else if !reason.isEmpty && reason != "stopped" {
             Toast.show("Scrolling capture \(reason)", symbol: "exclamationmark.triangle.fill",
                        detail: "Kept what was captured: \(frames) shots, \(Int(CGFloat(stitcher.height) / scale)) points tall")
         }
@@ -178,6 +181,7 @@ enum ScrollCapture {
         // so each view's new bottom rows are kept pending and taken from the following view instead, where they
         // sit higher up and have had time to load; whatever is still pending at the end comes from the last view.
         var pending: (frame: Frame, rows: Range<Int>)?
+        var cropDecided = false
         func advance(_ next: Frame, by d: Int, content: Int) {
             if let p = pending {
                 let inNext = (content - d - p.rows.count)..<(content - d)
@@ -201,19 +205,6 @@ enum ScrollCapture {
             if frames == 2 {
                 header = Frame.commonRows(previous, next, fromTop: true, limit: h * 2 / 5)
                 footer = Frame.commonRows(previous, next, fromTop: false, limit: h * 2 / 5)
-                // Only part of the width scrolls (a feed between sidebars): keep just that part, when what stays
-                // put on the sides is real content (a blank margin is left alone, so the page keeps its shape)
-                let moving = previous.movingColumns(to: next, rows: header..<(h - footer), scale: scale)
-                if moving.count >= 8, let l = moving.first, let r = moving.last {
-                    let pad = Int(8 * scale)
-                    let left = max(0, l - pad), right = min(previous.w, r + pad + 3)
-                    let all = previous.columns(scale: scale)
-                    let sides = all.filter { $0 < left || $0 >= right }
-                    if sides.count > all.count / 6, previous.textured(columns: sides, rows: header..<(h - footer)) {
-                        stitcher.crop = left..<right
-                        note("sidebars stay put: keeping columns \(left)..<\(right) of \(previous.w)")
-                    }
-                }
             }
             let content = h - footer
             let shift = Frame.displacement(from: previous, to: next, header: header, content: content, scale: scale, expected: step)
@@ -224,6 +215,22 @@ enum ScrollCapture {
                 stalls = 0
                 assumedRuns = 0
                 d = moved
+                if !cropDecided {
+                    // Only part of the width scrolls (a feed between sidebars): keep just that part, when what stays
+                    // put on the sides is real content (a blank margin is left alone, so the page keeps its shape)
+                    cropDecided = true
+                    let moving = previous.movingColumns(to: next, rows: header..<content, scale: scale)
+                    if moving.count >= 8, let l = moving.first, let r = moving.last {
+                        let pad = Int(8 * scale)
+                        let left = max(0, l - pad), right = min(previous.w, r + pad + 3)
+                        let all = previous.columns(scale: scale)
+                        let sides = all.filter { $0 < left || $0 >= right }
+                        if sides.count > all.count / 6, previous.textured(columns: sides, rows: header..<content) {
+                            stitcher.crop = left..<right
+                            note("sidebars stay put: keeping columns \(left)..<\(right) of \(previous.w)")
+                        }
+                    }
+                }
             case .still:                                      // the content stayed; only something else changed
                 stalls += 1
                 if stalls >= 2 { break loop }
@@ -237,8 +244,8 @@ enum ScrollCapture {
                 dump(previous, "scroll-unsure-prev"); dump(next, "scroll-unsure-next")   // for diagnosis
                 break loop
             }
-            if frames == 2 {
-                // The first view's bottom rows wait for the second view too (same reason), and its sticky footer
+            if pending == nil {
+                // The first view's bottom rows wait for the next view too (same reason), and its sticky footer
                 // rows go at the very end instead
                 let tail = min(d, content - header - 1)
                 stitcher.trimFirst(bottom: footer + tail)
@@ -248,6 +255,7 @@ enum ScrollCapture {
             previous = next
         }
         if frames >= maxFrames || stitcher.height >= maxHeight { reason = "reached the size limit" }
+        if reason.isEmpty, pending == nil, frames >= 2 { reason = "found nothing that scrolls under the cursor" }
         if let p = pending { stitcher.append(p.frame, rows: p.rows) }       // the last view's bottom, as it is
         if footer > 0 { stitcher.append(previous, rows: (h - footer)..<h) }   // the sticky footer, once
         return (stitcher, frames, reason)
@@ -478,9 +486,20 @@ enum ScrollCapture {
         /// strips can't agree.
         static func displacement(from prev: Frame, to next: Frame, header: Int, content: Int, scale: CGFloat, expected: Int) -> Shift {
             // Only the columns that scroll take part: a sidebar or chat panel that stays put never lines up with any shift
+            let all = prev.columns(scale: scale)
             var cols = prev.movingColumns(to: next, rows: header..<content, scale: scale)
-            if cols.count < 8 { cols = prev.columns(scale: scale) }
             let th = max(16, Int(24 * scale))
+            // Most of the width unchanged, and that part has content: the page stayed put and something inside it
+            // (a video, an animation) is what changed. Scrolling would have moved everything.
+            if cols.count < all.count / 2 {
+                let still = all.filter { !cols.contains($0) }
+                if prev.textured(columns: still, rows: header..<content) {
+                    var total = 0, n = 0
+                    for y in stride(from: header, to: content, by: 5) { total += prev.rowDiff(y, next, y, cols: still); n += 1 }
+                    if n > 0, total / n <= 4 { return .still }
+                }
+            }
+            if cols.count < 8 { cols = all }
             let span = content - header
             guard span > th * 2 else { return .flat }
             // Textured strips, from the bottom up, spread through the content
