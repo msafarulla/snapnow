@@ -50,6 +50,8 @@ struct Page {
     /// Lazy loading: the lowest `lazy` rows of every view show placeholders (flat grey boxes) that turn into the
     /// real content once scrolled up into view, as feeds do.
     var lazy: Int = 0
+    /// A paged view: smooth scrolling does nothing, a wheel tick shows the next page (the content under the header).
+    var paged = false
     func paintSides(_ c: CGContext, height: Int) {
         guard sidebars > 0 else { return }
         for x in [0, w - sidebars] {
@@ -87,7 +89,15 @@ func check(_ name: String, page: Page, step: Int, actualStep: (Int) -> Int) asyn
     var off = 0
     let first = page.frame(at: 0)
     let r = await ScrollCapture.stitch(first: first, scale: 1, step: step,
-        next: { page.frame(at: off) }, scroll: { off = min(page.maxOffset, off + actualStep(off)) }, cancelled: { false })
+        next: { page.frame(at: off) },
+        scroll: { kind in
+            switch (kind, page.paged) {
+            case (.pixels, false): off = min(page.maxOffset, off + actualStep(off))
+            case (.tick, false): off = min(page.maxOffset, off + 30)            // a notch: three lines
+            case (.pixels, true): break                                          // ignored by a paged view
+            case (.tick, true): off = min(page.maxOffset, off + page.view - page.header)
+            }
+        }, cancelled: { false })
     let got = ScrollCapture.Frame(r.stitcher.image(width: page.w)!)!
     let want = page.expected()
     var bad = 0
@@ -115,6 +125,8 @@ extension ScrollCapture.Frame {
 }
 
 @main struct Harness2 { static func main() async {
+    var shorts = Page(w: 900, hs: 60 + 5 * 640, view: 700, header: 60, footer: 0, seed: 21); shorts.paged = true
+    await check("paged view (Shorts): a wheel tick per page", page: shorts, step: 280, actualStep: { _ in 0 })
     var lazyFeed = Page(w: 1200, hs: 3200, view: 800, header: 60, footer: 0, seed: 5); lazyFeed.sidebars = 300; lazyFeed.lazy = 220
     await check("lazy-loading feed (bottom placeholders change after the scroll)", page: lazyFeed, step: 320, actualStep: { _ in 320 })
     var feed = Page(w: 1200, hs: 3200, view: 800, header: 60, footer: 0, seed: 11); feed.sidebars = 300

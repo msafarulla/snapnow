@@ -142,8 +142,13 @@ enum ScrollCapture {
         // loading (feeds show placeholders below the fold that fill in once scrolled up)
         let stepPoints = max(40, Int(area.height * 0.4))
         let result = await stitch(first: first, scale: scale, step: Int(CGFloat(stepPoints) * scale),
-                                  next: { await settled() }, scroll: { scroll(by: stepPoints, at: centre) },
-                                  cancelled: moved, progress: { hud.text = "Scrolling… \($0) shots · Esc or move the mouse to stop" })
+                                  next: { await settled() }, scroll: { kind in
+                                      switch kind {
+                                      case .pixels: scroll(by: stepPoints, at: centre)
+                                      case .tick: tick(at: centre)
+                                      }
+                                  },
+                                  cancelled: moved, progress: { hud.text = "Scrolling… \($0) shots · Enter stops and keeps it" })
         let stitcher = result.stitcher, frames = result.frames, reason = result.reason
         let w = first.w
         note("done: \(frames) shots, \(stitcher.height) px tall \(reason)")
@@ -169,7 +174,10 @@ enum ScrollCapture {
     /// The scroll-shoot-align loop, apart from the screen: `next` gives the shot after a `scroll`, so it can be
     /// driven by synthetic frames in tests. Returns what was stitched, the number of shots, and why it stopped
     /// ("" = the end of the page, "stopped" = the user, otherwise a problem to tell the user about).
-    @MainActor static func stitch(first: Frame, scale: CGFloat, step: Int, next: @MainActor () async -> Frame?, scroll: @MainActor () -> Void,
+    /// How the engine asks for movement: smooth pixels (pages), or a wheel tick (paged views like Shorts).
+    enum ScrollKind { case pixels, tick }
+
+    @MainActor static func stitch(first: Frame, scale: CGFloat, step: Int, next: @MainActor () async -> Frame?, scroll: @MainActor (ScrollKind) -> Void,
                                   cancelled: @MainActor () -> Bool, progress: @MainActor (Int) -> Void = { _ in }) async -> (stitcher: Stitcher, frames: Int, reason: String) {
         let h = first.h
         var stitcher = Stitcher(first: first)
@@ -182,6 +190,9 @@ enum ScrollCapture {
         // sit higher up and have had time to load; whatever is still pending at the end comes from the last view.
         var pending: (frame: Frame, rows: Range<Int>)?
         var cropDecided = false
+        var ticked = false        // the last movement was a wheel tick (pixel scrolling had done nothing)
+        var paged = false         // a paged view (Shorts, Reels): each tick is a new page, stacked whole
+        var retried = false       // one more shot after an alignment that failed (content may have been mid-load)
         func advance(_ next: Frame, by d: Int, content: Int) {
             if let p = pending {
                 let inNext = (content - d - p.rows.count)..<(content - d)
@@ -193,7 +204,9 @@ enum ScrollCapture {
         loop: while frames < maxFrames, stitcher.height < maxHeight {
             if cancelled() { reason = "stopped"; break }
             progress(frames)
-            scroll()
+            // A wheel tick after a stall: a paged view ignores smooth scrolling but turns a page per tick
+            ticked = paged || stalls > 0
+            scroll(ticked ? .tick : .pixels)
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard let next = await next() else { reason = "lost a shot"; break }
             frames += 1
@@ -202,13 +215,22 @@ enum ScrollCapture {
                 if stalls >= 2 { break }
                 continue
             }
-            if frames == 2 {
+            if frames == 2 || (header == 0 && footer == 0) {
                 header = Frame.commonRows(previous, next, fromTop: true, limit: h * 2 / 5)
                 footer = Frame.commonRows(previous, next, fromTop: false, limit: h * 2 / 5)
             }
             let content = h - footer
+            if paged {                                        // every tick is the next page, kept whole
+                let moving = previous.movingColumns(to: next, rows: header..<content, scale: scale)
+                if moving.count < previous.columns(scale: scale).count / 4 { stalls += 1; if stalls >= 2 { break }; continue }
+                stalls = 0
+                stitcher.append(next, rows: header..<content)
+                note("shot \(frames): page \(stitcher.height / max(1, content - header))")
+                previous = next
+                continue
+            }
             let shift = Frame.displacement(from: previous, to: next, header: header, content: content, scale: scale, expected: step)
-            note("shot \(frames): header \(header), footer \(footer), shift \(shift)")
+            note("shot \(frames): header \(header), footer \(footer), shift \(shift)\(ticked ? " (after a wheel tick)" : "")")
             var d: Int
             switch shift {
             case .moved(let moved):
@@ -240,10 +262,29 @@ enum ScrollCapture {
                 if assumedRuns > 3 { break loop }
                 d = min(step, content - header)
             case .unsure:
+                if ticked {
+                    // Pixel scrolling did nothing and a wheel tick changed most of the view: a paged view. The
+                    // first view stays whole; this and every further tick add a page.
+                    let moving = previous.movingColumns(to: next, rows: header..<content, scale: scale)
+                    if moving.count >= previous.columns(scale: scale).count / 4 {
+                        paged = true
+                        stalls = 0
+                        stitcher.append(next, rows: header..<content)
+                        note("paged view: stacking pages")
+                        previous = next
+                        continue
+                    }
+                }
+                if !retried {                                 // once more: the page may have been mid-load
+                    retried = true
+                    note("shot \(frames): retrying")
+                    continue
+                }
                 reason = "could not align a shot"
                 dump(previous, "scroll-unsure-prev"); dump(next, "scroll-unsure-next")   // for diagnosis
                 break loop
             }
+            retried = false
             if pending == nil {
                 // The first view's bottom rows wait for the next view too (same reason), and its sticky footer
                 // rows go at the very end instead
@@ -255,16 +296,17 @@ enum ScrollCapture {
             previous = next
         }
         if frames >= maxFrames || stitcher.height >= maxHeight { reason = "reached the size limit" }
-        if reason.isEmpty, pending == nil, frames >= 2 { reason = "found nothing that scrolls under the cursor" }
+        if reason.isEmpty, pending == nil, !paged, frames >= 2 { reason = "found nothing that scrolls under the cursor" }
         if let p = pending { stitcher.append(p.frame, rows: p.rows) }       // the last view's bottom, as it is
         if footer > 0 { stitcher.append(previous, rows: (h - footer)..<h) }   // the sticky footer, once
         return (stitcher, frames, reason)
     }
 
-    /// Esc as a global hot key for the length of a capture.
+    /// Enter and Esc as global hot keys for the length of a capture: both stop it and keep what it has.
     private final class EscapeKey {
         private(set) var pressed = false
         private var ref: EventHotKeyRef?
+        private var ref2: EventHotKeyRef?
         private var handler: EventHandlerRef?
         private static let signature = OSType(0x5363726C)   // 'Scrl'
 
@@ -282,12 +324,15 @@ enum ScrollCapture {
                 return OSStatus(eventNotHandledErr)
             }, 1, &spec, me, &handler)
             RegisterEventHotKey(UInt32(kVK_Escape), 0, EventHotKeyID(signature: Self.signature, id: 1), GetApplicationEventTarget(), 0, &ref)
+            RegisterEventHotKey(UInt32(kVK_Return), 0, EventHotKeyID(signature: Self.signature, id: 2), GetApplicationEventTarget(), 0, &ref2)
         }
 
         func release() {
             if let ref { UnregisterEventHotKey(ref) }
+            if let ref2 { UnregisterEventHotKey(ref2) }
             if let handler { RemoveEventHandler(handler) }
             ref = nil
+            ref2 = nil
             handler = nil
         }
     }
@@ -325,6 +370,13 @@ enum ScrollCapture {
     /// Cocoa global point → CoreGraphics global point (top-left origin of the main display).
     private static func cg(_ p: CGPoint) -> CGPoint {
         CGPoint(x: p.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - p.y)
+    }
+
+    /// One mouse-wheel notch down (three lines), as a paged view (Shorts, Reels) expects, under `at`.
+    private static func tick(at: CGPoint) {
+        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -3, wheel2: 0, wheel3: 0) else { return }
+        event.location = cg(at)
+        event.post(tap: .cghidEventTap)
     }
 
     /// One continuous (trackpad-style) scroll of `points` down, delivered to whatever is under `at`.
@@ -522,7 +574,30 @@ enum ScrollCapture {
                 }
                 return total / max(1, rows)
             }
-            // Each strip's best shift (0…1.5× the ask), when it matches well enough
+            // Pages usually scroll exactly as asked: when the strips that are still in view agree on that (jointly
+            // and most of them individually), take it, refined by a row or two
+            func joint(_ cand: Int) -> (mean: Int, good: Int, n: Int) {
+                var total = 0, good = 0, n = 0
+                for strip in strips where strip - cand >= header {
+                    let sc = score(strip: strip, at: strip - cand)
+                    total += sc; n += 1
+                    if sc <= 12 { good += 1 }
+                }
+                return (n == 0 ? Int.max : total / n, good, n)
+            }
+            if expected > 1 {
+                var best = (d: expected, mean: Int.max, good: 0, n: 0)
+                for cand in [expected, expected - 1, expected + 1, expected - 2, expected + 2] where cand > 1 {   // nearest first: ties keep the ask
+                    let j = joint(cand)
+                    if j.mean < best.mean { best = (cand, j.mean, j.good, j.n) }
+                }
+                note("  strips \(strips) · at the ask \(expected): mean \(best.mean), \(best.good)/\(best.n) strips good")
+                // Most strips match there (a strip that changed meanwhile, like a photo that re-rendered or a
+                // tooltip, can pull the mean up without meaning anything), or all of them nearly do
+                if best.n > 0, (best.n >= 2 && best.good * 2 > best.n) || best.mean <= 16 { return .moved(best.d) }
+            }
+            // Otherwise each strip votes for its best shift (0…1.5× the ask); a strip whose match is ambiguous
+            // (nearly as good somewhere else, as on a plain photo or blank paper) doesn't vote
             var votes: [(d: Int, s: Int)] = []
             let maxShift = max(expected * 3 / 2, th)
             for strip in strips {
@@ -531,8 +606,10 @@ enum ScrollCapture {
                 guard let best = scores.map(\.s).min(), best <= 12 else { continue }
                 let ties = scores.filter { $0.s <= best + 1 }
                 let pick = ties.min { abs(strip - $0.y - expected) < abs(strip - $1.y - expected) }!
+                if scores.contains(where: { $0.s <= best + 3 && abs($0.y - pick.y) > 3 }) { continue }   // ambiguous
                 votes.append((strip - pick.y, best))
             }
+            note("  votes \(votes.map { "\($0.d)@\($0.s)" })")
             if votes.isEmpty {
                 // Nothing found: if the ask carries the lowest strip off the top, what scrolled in below was blank
                 return strips[0] - expected < header ? .flat : .unsure
@@ -607,7 +684,7 @@ enum ScrollCapture {
         var text: String { get { label.stringValue } set { label.stringValue = newValue } }
 
         init(above area: CGRect) {
-            label = NSTextField(labelWithString: "Scrolling… Esc or move the mouse to stop")
+            label = NSTextField(labelWithString: "Scrolling… Enter stops and keeps it")
             label.font = .systemFont(ofSize: 13, weight: .medium)
             label.textColor = .white
             label.alignment = .center

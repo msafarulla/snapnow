@@ -92,8 +92,9 @@ crosshair instead (Space switches it to picking a window), so capturing still wo
 web page, document or chat that scrolls, and SnapNow scrolls it for you, shooting as it goes, and stitches the
 shots into one tall image that opens in the editor. The ordinary picker (⌃⇧C) offers it too, the way Snagit does: hover a
 window and a pulsing orange arrow, **Capture everything scrollable**, appears at its bottom (S does the same). Every window gets the offer; on one that doesn't scroll
-the capture simply ends with a single shot. It stops by itself at the end of the page; press Esc or move the mouse to
-stop it earlier and keep what it has. Bars that stay put while the rest scrolls (a sticky header, the footer)
+the capture simply ends with a single shot. It stops by itself at the end of the page; press Enter (or Esc, or move the
+mouse) to stop it earlier and keep what it has. A paged view such as YouTube Shorts, which turns a whole page per
+wheel notch instead of scrolling, is stacked page by page. Bars that stay put while the rest scrolls (a sticky header, the footer)
 appear once, where they belong. Pages that keep changing while they scroll (animations, content that loads as
 you go) can confuse the alignment; SnapNow then says so and keeps what it had.
 
