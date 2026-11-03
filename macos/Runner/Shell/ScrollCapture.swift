@@ -129,7 +129,7 @@ enum ScrollCapture {
             }
             return last
         }
-        func moved() -> Bool { esc.pressed || hypot(NSEvent.mouseLocation.x - placed.x, NSEvent.mouseLocation.y - placed.y) > cancelDistance }
+        func moved() -> Bool { hud.stopRequested || esc.pressed || hypot(NSEvent.mouseLocation.x - placed.x, NSEvent.mouseLocation.y - placed.y) > cancelDistance }
 
         guard let first = await settled() else {
             note("no first shot: \(shotError ?? "?")")
@@ -676,10 +676,27 @@ enum ScrollCapture {
 
     // MARK: HUD
 
-    /// A small click-through label above (or below) the area: never captured, never focused.
+    /// A non-activating panel that can still become key: Enter and Esc reach it while the page's app stays active
+    /// (the same trick as the area picker), and its view turns them into a stop request.
+    private final class KeyHUDPanel: NSPanel {
+        override var canBecomeKey: Bool { true }
+    }
+    private final class KeyView: NSView {
+        var onStop: (() -> Void)?
+        override var acceptsFirstResponder: Bool { true }
+        override func keyDown(with event: NSEvent) {
+            switch event.keyCode {
+            case 36, 76, 53: onStop?()                      // Return, keypad Enter, Esc
+            default: super.keyDown(with: event)
+            }
+        }
+    }
+
+    /// A small label above (or below) the area: never captured; key, so Enter/Esc stop the capture.
     private final class HUD {
         private let panel: NSPanel
         private let label: NSTextField
+        private(set) var stopRequested = false
 
         var text: String { get { label.stringValue } set { label.stringValue = newValue } }
 
@@ -693,8 +710,8 @@ enum ScrollCapture {
             var origin = CGPoint(x: area.midX - size.width / 2, y: area.maxY + 10)
             if let screen = NSScreen.screens.first(where: { $0.frame.contains(CGPoint(x: area.midX, y: area.midY)) }),
                origin.y + size.height > screen.visibleFrame.maxY { origin.y = area.minY - size.height - 10 }
-            panel = NSPanel(contentRect: CGRect(origin: origin, size: size), styleMask: [.borderless, .nonactivatingPanel],
-                            backing: .buffered, defer: false)
+            panel = KeyHUDPanel(contentRect: CGRect(origin: origin, size: size), styleMask: [.borderless, .nonactivatingPanel],
+                                backing: .buffered, defer: false)
             panel.isOpaque = false
             panel.backgroundColor = .clear
             panel.hasShadow = true
@@ -702,14 +719,16 @@ enum ScrollCapture {
             panel.ignoresMouseEvents = true
             panel.sharingType = .none            // never in the shots
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            let view = NSView(frame: CGRect(origin: .zero, size: size))
+            let view = KeyView(frame: CGRect(origin: .zero, size: size))
             view.wantsLayer = true
             view.layer?.backgroundColor = NSColor(calibratedWhite: 0.1, alpha: 0.88).cgColor
             view.layer?.cornerRadius = 8
             label.frame = CGRect(x: 14, y: (size.height - label.frame.height) / 2, width: size.width - 28, height: label.frame.height)
             view.addSubview(label)
+            view.onStop = { [weak self] in self?.stopRequested = true }
             panel.contentView = view
-            panel.orderFrontRegardless()
+            panel.makeKeyAndOrderFront(nil)
+            panel.makeFirstResponder(view)
         }
 
         func close() { panel.orderOut(nil) }
