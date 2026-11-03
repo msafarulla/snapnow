@@ -666,8 +666,11 @@ private final class RegionView: NSView {
         if scrollButtonPressed {
             scrollButtonPressed = false
             capture.mouse = here
-            if let b = scrollButton, b.contains(local(CGRect(origin: here, size: .zero)).origin) { capture.scrollPicked() }
-            capture.redraw()
+            if let b = scrollButton, b.contains(local(CGRect(origin: here, size: .zero)).origin) {
+                capture.scrollPicked()   // finishes the picker: `capture` (unowned) is gone after this, so nothing more here
+            } else {
+                capture.redraw()
+            }
             return
         }
         // Releasing inside the auto-hiding Dock's strip: macOS reports the release at the Dock's top edge
