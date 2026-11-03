@@ -77,6 +77,7 @@ When you press ⌃⇧C the screen freezes and dims, so menus and hover states st
 | The window under the cursor | Click |
 | The whole screen | Click where there's no window |
 | The same area as last time | **Enter**, or click inside the orange outline |
+| Everything that scrolls under the cursor | **S** (see [Scrolling capture](#scrolling-capture)) |
 | Nothing | **Esc** (you're back in the app you were using) |
 
 Your last area is remembered, even after a restart, and shown with an orange marching-ants outline each time,
@@ -89,7 +90,10 @@ crosshair instead (Space switches it to picking a window), so capturing still wo
 
 ⌃⇧S (or **Capture Scrolling Area** in the menu) captures more than fits on the screen: drag over the part of a
 web page, document or chat that scrolls, and SnapNow scrolls it for you, shooting as it goes, and stitches the
-shots into one tall image that opens in the editor. It stops by itself at the end of the page; move the mouse to
+shots into one tall image that opens in the editor. The ordinary picker (⌃⇧C) offers it too: hover a window
+and press **S** to scroll-capture it. When SnapNow has the Accessibility permission (System Settings › Privacy &
+Security › Accessibility) the picker notices windows that scroll and says so under the magnifier; without it,
+S still works, it just isn't announced. It stops by itself at the end of the page; move the mouse to
 stop it earlier and keep what it has. Bars that stay put while the rest scrolls (a sticky header, the footer)
 appear once, where they belong. Pages that keep changing while they scroll (animations, content that loads as
 you go) can confuse the alignment; SnapNow then says so and keeps what it had.

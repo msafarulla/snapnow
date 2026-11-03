@@ -20,6 +20,46 @@ final class RegionCapture {
     private var views: [RegionView] = []
     private var completion: ((URL?) -> Void)?
     private var onPicked: ((CGRect, NSScreen) -> Void)?   // pick mode: hand back the area instead of saving it
+    /// Set by the shell: runs a scrolling capture of the area when the user presses S in the picker.
+    static var scrollHandler: ((CGRect, NSScreen) -> Void)?
+    /// Whether what's under the cursor scrolls (an AXScrollArea up the accessibility tree), by window, so the
+    /// picker can offer the scrolling capture. Needs Accessibility; without it nothing is detected.
+    private var scrollableCache: [String: Bool] = [:]
+    var scrollsUnderCursor: Bool {
+        guard onPicked == nil, Self.scrollHandler != nil, !isDragging, let w = hoveredWindow else { return false }
+        let key = NSStringFromRect(w)
+        if let known = scrollableCache[key] { return known }
+        let found = Self.scrollArea(at: mouse)
+        scrollableCache[key] = found
+        return found
+    }
+
+    /// Whether an AXScrollArea (or a web area) encloses the point (global Cocoa coordinates).
+    private static func scrollArea(at p: CGPoint) -> Bool {
+        guard AXIsProcessTrusted() else { return false }
+        let mainHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(p.x), Float(mainHeight - p.y), &element) == .success,
+              var e = element else { return false }
+        for _ in 0..<24 {
+            var role: AnyObject?
+            if AXUIElementCopyAttributeValue(e, kAXRoleAttribute as CFString, &role) == .success,
+               let r = role as? String, r == kAXScrollAreaRole || r == "AXWebArea" { return true }
+            var parent: AnyObject?
+            guard AXUIElementCopyAttributeValue(e, kAXParentAttribute as CFString, &parent) == .success, let next = parent else { return false }
+            e = next as! AXUIElement
+        }
+        return false
+    }
+
+    /// S: a scrolling capture of what a click would take (the hovered window, or the last area).
+    func scrollPicked() {
+        guard let handler = Self.scrollHandler, onPicked == nil, let screen = screenUnderMouse(),
+              let r = focus?.intersection(screen.frame), r.width >= 40, r.height >= 60 else { NSSound.beep(); return }
+        UserDefaults.standard.set(NSStringFromRect(r), forKey: Self.lastKey)
+        finish(nil)
+        handler(r, screen)
+    }
     private var url: URL!
     private var sound = false
     private var previousApp: NSRunningApplication?   // where Esc returns to
@@ -483,7 +523,8 @@ private final class RegionView: NSView {
         let loupeRect = drawLoupe(at: m, ctx: ctx, label: size)
         if capture.dragStart == nil {
             let last = capture.offered.map { "\nEnter or click inside the outline: last area (\(Int($0.width.rounded())) x \(Int($0.height.rounded())))" } ?? ""
-            hint("Click, hold, and drag to select region" + last, beside: loupeRect)
+            let scroll = capture.scrollsUnderCursor ? "\n↕ This scrolls: press S to capture all of it" : ""
+            hint("Click, hold, and drag to select region" + last + scroll, beside: loupeRect)
         }
     }
 
@@ -604,6 +645,7 @@ private final class RegionView: NSView {
         switch event.keyCode {
         case 53: capture.cancel()                       // Esc
         case 36, 76: capture.captureLastArea()          // Return, keypad Enter
+        case 1: capture.scrollPicked()                  // S: scrolling capture of the hovered window / last area
         default: super.keyDown(with: event)
         }
     }

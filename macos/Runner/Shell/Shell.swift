@@ -57,6 +57,10 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         }
         registerHotKeys()
         NotificationCenter.default.addObserver(self, selector: #selector(registerHotKeys), name: Shortcuts.changed, object: nil)
+        // The region picker offers S (scrolling capture) over anything that scrolls
+        RegionCapture.scrollHandler = { [weak self] rect, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self?.scrollCapture(area: rect) }   // after the picker's completion
+        }
         // Scripting hook: a distributed notification "com.mm.snaplite.scrollCapture" whose object is "x,y,w,h"
         // (global Cocoa points) runs a scrolling capture of that area without the picker (automated tests).
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(scriptedScrollCapture(_:)),
@@ -342,14 +346,20 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             statusItem.menu = menu            // attach just long enough to show it
             statusItem.button?.performClick(nil)
             statusItem.menu = nil
-        } else if popover.isShown {
+        } else if popover.isShown, popover.contentViewController?.view.window?.isVisible == true {
             popover.performClose(nil)
         } else if let button = statusItem.button {
+            if popover.isShown { popover.performClose(nil) }   // thinks it's open but nothing shows: start over
             panel.reload()
             popover.appearance = Theme.appearance
+            // Active first: over another app's full-screen Space the popover otherwise lands on the desktop Space
+            // (or closes at once as the menu bar slides away) and nothing seems to happen.
+            NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate()
-            popover.contentViewController?.view.window?.makeKey()   // so the first click on a chip counts
+            if let w = popover.contentViewController?.view.window {
+                w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+                w.makeKey()                                      // so the first click on a chip counts
+            }
             // .transient only notices outside clicks while SnapNow is active, and activate() is just a request
             // (often ignored for a menu bar app), so a click in any other app closes the panel too. Global
             // mouse monitors need no Accessibility permission; clicks on our own icon aren't reported here.

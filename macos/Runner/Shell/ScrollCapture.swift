@@ -226,8 +226,10 @@ enum ScrollCapture {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         p.arguments = ["-x", "-t", "bmp", "-R\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))", tmp.path]
-        try p.run()
-        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in p.terminationHandler = { _ in c.resume() } }
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            p.terminationHandler = { _ in c.resume() }   // set before run: a fast exit would otherwise never resume
+            do { try p.run() } catch { c.resume() }
+        }
         guard let source = CGImageSourceCreateWithURL(tmp as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: true] as CFDictionary) else {
             throw ShotError(errorDescription: "screencapture gave no image")
