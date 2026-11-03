@@ -25,11 +25,17 @@ final class RegionCapture {
     /// Whether what's under the cursor scrolls (an AXScrollArea up the accessibility tree), by window, so the
     /// picker can offer the scrolling capture. Needs Accessibility; without it nothing is detected.
     private var scrollableCache: [String: Bool] = [:]
+    private var probedCells: Set<String> = []
     var scrollsUnderCursor: Bool {
-        guard onPicked == nil, Self.scrollHandler != nil, !isDragging, let w = hoveredWindow else { return false }
+        guard onPicked == nil, Self.scrollHandler != nil, !isDragging, let w = focus else { return false }
         let key = NSStringFromRect(w)
-        if let known = scrollableCache[key] { return known }
-        let found = Self.scrollArea(at: mouse)
+        if scrollableCache[key] == true { return true }
+        // Probe the window's middle once, and the cursor's neighbourhood (80-pt cells) as it moves: a toolbar or
+        // margin under the first hover must not settle it for the whole window
+        let cell = "\(key)|\(Int(mouse.x / 80)),\(Int(mouse.y / 80))"
+        guard !probedCells.contains(cell) else { return false }
+        probedCells.insert(cell)
+        let found = (scrollableCache[key] == nil && Self.scrollArea(at: CGPoint(x: w.midX, y: w.midY))) || Self.scrollArea(at: mouse)
         scrollableCache[key] = found
         return found
     }
@@ -37,7 +43,7 @@ final class RegionCapture {
     /// Whether the picker shows the "capture everything that scrolls" button on the hovered window: with
     /// Accessibility access only on windows that scroll, otherwise on every window (it can't tell).
     var offersScroll: Bool {
-        guard onPicked == nil, Self.scrollHandler != nil, !isDragging, hoveredWindow != nil, !overOffered else { return false }
+        guard onPicked == nil, Self.scrollHandler != nil, !isDragging, hoveredWindow != nil || overOffered else { return false }
         return AXIsProcessTrusted() ? scrollsUnderCursor : true
     }
 
@@ -51,7 +57,7 @@ final class RegionCapture {
         for _ in 0..<24 {
             var role: AnyObject?
             if AXUIElementCopyAttributeValue(e, kAXRoleAttribute as CFString, &role) == .success,
-               let r = role as? String, r == kAXScrollAreaRole || r == "AXWebArea" { return true }
+               let r = role as? String, r == kAXScrollAreaRole || r == "AXWebArea" || r == "AXList" || r == kAXTableRole || r == kAXOutlineRole { return true }
             var parent: AnyObject?
             guard AXUIElementCopyAttributeValue(e, kAXParentAttribute as CFString, &parent) == .success, let next = parent else { return false }
             e = next as! AXUIElement
