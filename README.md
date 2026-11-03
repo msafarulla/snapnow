@@ -91,9 +91,8 @@ crosshair instead (Space switches it to picking a window), so capturing still wo
 ⌃⇧S (or **Capture Scrolling Area** in the menu) captures more than fits on the screen: drag over the part of a
 web page, document or chat that scrolls, and SnapNow scrolls it for you, shooting as it goes, and stitches the
 shots into one tall image that opens in the editor. The ordinary picker (⌃⇧C) offers it too, the way Snagit does: hover a
-window and a pulsing orange arrow, **Capture everything scrollable**, appears at its bottom (S does the same). When SnapNow has the
-Accessibility permission (System Settings › Privacy & Security › Accessibility) the button shows only on windows
-that actually scroll; without it, every window gets the offer. It stops by itself at the end of the page; press Esc or move the mouse to
+window and a pulsing orange arrow, **Capture everything scrollable**, appears at its bottom (S does the same). Every window gets the offer; on one that doesn't scroll
+the capture simply ends with a single shot. It stops by itself at the end of the page; press Esc or move the mouse to
 stop it earlier and keep what it has. Bars that stay put while the rest scrolls (a sticky header, the footer)
 appear once, where they belong. Pages that keep changing while they scroll (animations, content that loads as
 you go) can confuse the alignment; SnapNow then says so and keeps what it had.

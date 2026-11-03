@@ -40,11 +40,11 @@ final class RegionCapture {
         return found
     }
 
-    /// Whether the picker shows the "capture everything that scrolls" button on the hovered window: with
-    /// Accessibility access only on windows that scroll, otherwise on every window (it can't tell).
+    /// Whether the picker shows the scroll arrow: on every hovered window (and the remembered last area). Telling
+    /// scrollable windows apart through Accessibility proved unreliable (Chrome pages, YouTube, feeds), and an
+    /// arrow on a window that doesn't scroll costs nothing: the capture just ends with one shot.
     var offersScroll: Bool {
-        guard onPicked == nil, Self.scrollHandler != nil, !isDragging, hoveredWindow != nil || overOffered else { return false }
-        return AXIsProcessTrusted() ? scrollsUnderCursor : true
+        onPicked == nil && Self.scrollHandler != nil && !isDragging && (hoveredWindow != nil || overOffered)
     }
 
     /// Whether an AXScrollArea (or a web area) encloses the point (global Cocoa coordinates).
