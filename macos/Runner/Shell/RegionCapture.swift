@@ -241,12 +241,14 @@ final class RegionCapture {
         }
         NSCursor.crosshair.push()
         redraw()
-        // Marching ants on the last area's outline: only that thin frame is redrawn, while the overlay is up
-        if offered != nil {
-            antsTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
-                guard let self, let last = self.offered, !self.isDragging else { return }
-                self.antsPhase = (self.antsPhase + 1) .truncatingRemainder(dividingBy: 10)
-                for v in self.views { v.redrawOutline(last) }
+        // Marching ants on the last area's outline and the breathing scroll arrow: only those small parts are
+        // redrawn, while the overlay is up
+        antsTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
+            guard let self, !self.isDragging else { return }
+            self.antsPhase = (self.antsPhase + 1) .truncatingRemainder(dividingBy: 10)
+            for v in self.views {
+                if let last = self.offered { v.redrawOutline(last) }
+                v.redrawScrollButton()
             }
         }
     }
@@ -455,6 +457,10 @@ private final class RegionView: NSView {
     private var origin: CGPoint { frozen.screen.frame.origin }
 
     /// Just the outline's frame (global rect), for the marching ants.
+    func redrawScrollButton() {
+        if let r = scrollButton { setNeedsDisplay(r.insetBy(dx: -12, dy: -12)) }
+    }
+
     func redrawOutline(_ r: CGRect) {
         let l = local(r)
         guard l.insetBy(dx: -4, dy: -4).intersects(bounds) else { return }
