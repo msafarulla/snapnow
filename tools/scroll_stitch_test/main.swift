@@ -47,6 +47,9 @@ struct Page {
     var maxOffset: Int { hs - view }
     /// Static side columns (with content) painted over every view: only the middle scrolls, like a feed.
     var sidebars: Int = 0
+    /// Lazy loading: the lowest `lazy` rows of every view show placeholders (flat grey boxes) that turn into the
+    /// real content once scrolled up into view, as feeds do.
+    var lazy: Int = 0
     func paintSides(_ c: CGContext, height: Int) {
         guard sidebars > 0 else { return }
         for x in [0, w - sidebars] {
@@ -60,6 +63,10 @@ struct Page {
         let slice = source.cropping(to: CGRect(x: 0, y: off, width: w, height: view))!
         c.draw(slice, in: CGRect(x: 0, y: 0, width: w, height: view))
         paintSides(c, height: view)
+        if lazy > 0 && off < maxOffset {   // placeholders along the bottom (CG is bottom-up: y 0 is the view's bottom)
+            c.setFillColor(CGColor(red: 0.85, green: 0.85, blue: 0.85, alpha: 1))
+            c.fill(CGRect(x: sidebars + 20, y: 0, width: w - 2 * sidebars - 40, height: lazy))
+        }
         if let h = headerImg { c.draw(h, in: CGRect(x: 0, y: view - header, width: w, height: header)) }
         if let f = footerImg { c.draw(f, in: CGRect(x: 0, y: 0, width: w, height: footer)) }
         return ScrollCapture.Frame(c.makeImage()!)!
@@ -108,14 +115,16 @@ extension ScrollCapture.Frame {
 }
 
 @main struct Harness2 { static func main() async {
+    var lazyFeed = Page(w: 1200, hs: 3200, view: 800, header: 60, footer: 0, seed: 5); lazyFeed.sidebars = 300; lazyFeed.lazy = 220
+    await check("lazy-loading feed (bottom placeholders change after the scroll)", page: lazyFeed, step: 320, actualStep: { _ in 320 })
     var feed = Page(w: 1200, hs: 3200, view: 800, header: 60, footer: 0, seed: 11); feed.sidebars = 300
-    await check("feed between static sidebars (Facebook)", page: feed, step: 480, actualStep: { _ in 480 })
-    await check("not scrollable (one view tall)", page: Page(w: 800, hs: 700, view: 700, header: 0, footer: 0), step: 420, actualStep: { _ in 420 })
-    await check("shorter than one scroll", page: Page(w: 800, hs: 900, view: 700, header: 40, footer: 0), step: 420, actualStep: { _ in 420 })
-    await check("plain page, no bars", page: Page(w: 800, hs: 3000, view: 700, header: 0, footer: 0), step: 420, actualStep: { _ in 420 })
-    await check("sticky header + footer", page: Page(w: 800, hs: 3000, view: 700, header: 56, footer: 36), step: 420, actualStep: { _ in 420 })
-    await check("sluggish page (scrolls 70% of the ask)", page: Page(w: 800, hs: 2600, view: 700, header: 56, footer: 0), step: 420, actualStep: { _ in 294 })
-    await check("blank stretch in the middle", page: Page(w: 800, hs: 3200, view: 700, header: 0, footer: 36, blank: 1200..<2100), step: 420, actualStep: { _ in 420 })
-    await check("retina-ish wide page", page: Page(w: 2280, hs: 4000, view: 1850, header: 120, footer: 0, seed: 3), step: 1110, actualStep: { _ in 1110 })
+    await check("feed between static sidebars (Facebook)", page: feed, step: 320, actualStep: { _ in 320 })
+    await check("not scrollable (one view tall)", page: Page(w: 800, hs: 700, view: 700, header: 0, footer: 0), step: 280, actualStep: { _ in 280 })
+    await check("shorter than one scroll", page: Page(w: 800, hs: 900, view: 700, header: 40, footer: 0), step: 280, actualStep: { _ in 280 })
+    await check("plain page, no bars", page: Page(w: 800, hs: 3000, view: 700, header: 0, footer: 0), step: 280, actualStep: { _ in 280 })
+    await check("sticky header + footer", page: Page(w: 800, hs: 3000, view: 700, header: 56, footer: 36), step: 280, actualStep: { _ in 280 })
+    await check("sluggish page (scrolls 70% of the ask)", page: Page(w: 800, hs: 2600, view: 700, header: 56, footer: 0), step: 280, actualStep: { _ in 196 })
+    await check("blank stretch in the middle", page: Page(w: 800, hs: 3200, view: 700, header: 0, footer: 36, blank: 1200..<2100), step: 280, actualStep: { _ in 280 })
+    await check("retina-ish wide page", page: Page(w: 2280, hs: 4000, view: 1850, header: 120, footer: 0, seed: 3), step: 740, actualStep: { _ in 740 })
     exit(0)
 } }

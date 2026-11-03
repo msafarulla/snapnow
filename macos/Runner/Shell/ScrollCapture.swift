@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import ScreenCaptureKit
 
 /// Scrolling capture: pick an area over something that scrolls (a web page, a document, a long chat) and
@@ -96,6 +97,8 @@ enum ScrollCapture {
         }
         try? await Task.sleep(nanoseconds: 350_000_000)   // the picker's overlay is gone and the page is still
         let placed = NSEvent.mouseLocation
+        let esc = EscapeKey()   // Esc stops it (a Carbon hot key, so it works whichever app is in front)
+        defer { esc.release() }
 
         var shotError: String?
         func shoot() async -> Frame? {
@@ -126,7 +129,7 @@ enum ScrollCapture {
             }
             return last
         }
-        func moved() -> Bool { hypot(NSEvent.mouseLocation.x - placed.x, NSEvent.mouseLocation.y - placed.y) > cancelDistance }
+        func moved() -> Bool { esc.pressed || hypot(NSEvent.mouseLocation.x - placed.x, NSEvent.mouseLocation.y - placed.y) > cancelDistance }
 
         guard let first = await settled() else {
             note("no first shot: \(shotError ?? "?")")
@@ -135,10 +138,12 @@ enum ScrollCapture {
             PermissionGuide.shared.show()   // the only known cause: SnapNow's Screen Recording permission is off or stale
             return nil
         }
-        let stepPoints = max(40, Int(area.height * 0.6))     // 60% of the area per scroll: plenty of overlap to match
+        // 40% of the area per scroll: enough overlap to match even when the lowest part of each view was still
+        // loading (feeds show placeholders below the fold that fill in once scrolled up)
+        let stepPoints = max(40, Int(area.height * 0.4))
         let result = await stitch(first: first, scale: scale, step: Int(CGFloat(stepPoints) * scale),
                                   next: { await settled() }, scroll: { scroll(by: stepPoints, at: centre) },
-                                  cancelled: moved, progress: { hud.text = "Scrolling… \($0) shots · move the mouse to stop" })
+                                  cancelled: moved, progress: { hud.text = "Scrolling… \($0) shots · Esc or move the mouse to stop" })
         let stitcher = result.stitcher, frames = result.frames, reason = result.reason
         let w = first.w
         note("done: \(frames) shots, \(stitcher.height) px tall \(reason)")
@@ -169,6 +174,17 @@ enum ScrollCapture {
         var previous = first
         var stalls = 0, frames = 1, reason = ""
         var assumedRuns = 0
+        // The newest rows of a view are the least trustworthy (feeds fill them in after they scroll into view),
+        // so each view's new bottom rows are kept pending and taken from the following view instead, where they
+        // sit higher up and have had time to load; whatever is still pending at the end comes from the last view.
+        var pending: (frame: Frame, rows: Range<Int>)?
+        func advance(_ next: Frame, by d: Int, content: Int) {
+            if let p = pending {
+                let inNext = (content - d - p.rows.count)..<(content - d)
+                if inNext.lowerBound >= header { stitcher.append(next, rows: inNext) } else { stitcher.append(p.frame, rows: p.rows) }
+            }
+            pending = (next, (content - d)..<content)
+        }
 
         loop: while frames < maxFrames, stitcher.height < maxHeight {
             if cancelled() { reason = "stopped"; break }
@@ -185,7 +201,6 @@ enum ScrollCapture {
             if frames == 2 {
                 header = Frame.commonRows(previous, next, fromTop: true, limit: h * 2 / 5)
                 footer = Frame.commonRows(previous, next, fromTop: false, limit: h * 2 / 5)
-                if footer > 0 { stitcher.trimFirst(bottom: footer) }   // the sticky footer goes at the very end instead
                 // Only part of the width scrolls (a feed between sidebars): keep just that part, when what stays
                 // put on the sides is real content (a blank margin is left alone, so the page keeps its shape)
                 let moving = previous.movingColumns(to: next, rows: header..<(h - footer), scale: scale)
@@ -203,11 +218,12 @@ enum ScrollCapture {
             let content = h - footer
             let shift = Frame.displacement(from: previous, to: next, header: header, content: content, scale: scale, expected: step)
             note("shot \(frames): header \(header), footer \(footer), shift \(shift)")
+            var d: Int
             switch shift {
-            case .moved(let d):
+            case .moved(let moved):
                 stalls = 0
                 assumedRuns = 0
-                stitcher.append(next, rows: (content - d)..<content)
+                d = moved
             case .still:                                      // the content stayed; only something else changed
                 stalls += 1
                 if stalls >= 2 { break loop }
@@ -215,17 +231,65 @@ enum ScrollCapture {
             case .flat:                                       // nothing to align on (a blank stretch): take the scroll as sent
                 assumedRuns += 1
                 if assumedRuns > 3 { break loop }
-                let d = min(step, content - header)
-                stitcher.append(next, rows: (content - d)..<content)
+                d = min(step, content - header)
             case .unsure:
                 reason = "could not align a shot"
+                dump(previous, "scroll-unsure-prev"); dump(next, "scroll-unsure-next")   // for diagnosis
                 break loop
             }
+            if frames == 2 {
+                // The first view's bottom rows wait for the second view too (same reason), and its sticky footer
+                // rows go at the very end instead
+                let tail = min(d, content - header - 1)
+                stitcher.trimFirst(bottom: footer + tail)
+                pending = (previous, (content - tail)..<content)
+            }
+            advance(next, by: d, content: content)
             previous = next
         }
         if frames >= maxFrames || stitcher.height >= maxHeight { reason = "reached the size limit" }
+        if let p = pending { stitcher.append(p.frame, rows: p.rows) }       // the last view's bottom, as it is
         if footer > 0 { stitcher.append(previous, rows: (h - footer)..<h) }   // the sticky footer, once
         return (stitcher, frames, reason)
+    }
+
+    /// Esc as a global hot key for the length of a capture.
+    private final class EscapeKey {
+        private(set) var pressed = false
+        private var ref: EventHotKeyRef?
+        private var handler: EventHandlerRef?
+        private static let signature = OSType(0x5363726C)   // 'Scrl'
+
+        init() {
+            var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            let me = Unmanaged.passUnretained(self).toOpaque()
+            InstallEventHandler(GetApplicationEventTarget(), { _, event, userData in
+                var id = EventHotKeyID()
+                GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                  MemoryLayout<EventHotKeyID>.size, nil, &id)
+                if id.signature == EscapeKey.signature, let userData {
+                    Unmanaged<EscapeKey>.fromOpaque(userData).takeUnretainedValue().pressed = true
+                    return noErr
+                }
+                return OSStatus(eventNotHandledErr)
+            }, 1, &spec, me, &handler)
+            RegisterEventHotKey(UInt32(kVK_Escape), 0, EventHotKeyID(signature: Self.signature, id: 1), GetApplicationEventTarget(), 0, &ref)
+        }
+
+        func release() {
+            if let ref { UnregisterEventHotKey(ref) }
+            if let handler { RemoveEventHandler(handler) }
+            ref = nil
+            handler = nil
+        }
+    }
+
+    /// Writes a shot next to the log (~/Library/Caches/SnapLite/<name>.png) when a run has to give up.
+    private static func dump(_ frame: Frame, _ name: String) {
+        let url = Capture.cacheFolder.appendingPathComponent("\(name).png")
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, frame.image, nil)
+        CGImageDestinationFinalize(dest)
     }
 
     struct ShotError: LocalizedError {
@@ -407,52 +471,71 @@ enum ScrollCapture {
         enum Shift { case moved(Int), still, flat, unsure }
 
         /// By how many rows the content moved up between `prev` and `next` (`expected`: the scroll that was asked
-        /// for, in rows). Two textured strips of `prev` (the lowest one above the footer and one higher up) are
-        /// scored together against every candidate position in `next` from `header` down; near-ties (rows that
-        /// look like their neighbours) go to the candidate closest to `expected`. `.flat` when `prev` has nothing
-        /// to align on, `.unsure` when nothing matches well or the match is ambiguous.
+        /// for, in rows). Up to six textured strips spread through `prev` are each looked for in `next`; the shift
+        /// most of them agree on wins, so a strip that changed meanwhile (an image that loaded, a playing video, a
+        /// timestamp) can't spoil the match. Near-ties within a strip (rows that look like their neighbours) go to
+        /// the candidate closest to `expected`. `.flat` when `prev` has nothing to align on, `.unsure` when the
+        /// strips can't agree.
         static func displacement(from prev: Frame, to next: Frame, header: Int, content: Int, scale: CGFloat, expected: Int) -> Shift {
             // Only the columns that scroll take part: a sidebar or chat panel that stays put never lines up with any shift
             var cols = prev.movingColumns(to: next, rows: header..<content, scale: scale)
             if cols.count < 8 { cols = prev.columns(scale: scale) }
             let th = max(16, Int(24 * scale))
-            // The lowest textured strip of the content, looking up from the footer
-            var top = content - th
-            while top > header + th, !prev.textured(top..<(top + th), cols: cols) { top -= th / 2 }
-            guard top > header, prev.textured(top..<(top + th), cols: cols) else { return .flat }
-            // A second strip well above it, when there is one
-            var check = top - th * 3
-            while check > header, !prev.textured(check..<(check + th), cols: cols) { check -= th }
-            let second: Int? = check > header ? check : nil
+            let span = content - header
+            guard span > th * 2 else { return .flat }
+            // Textured strips, from the bottom up, spread through the content
+            var strips: [Int] = []
+            var t = content - th
+            let gap = max(th, (span - th) / 8)
+            while t >= header, strips.count < 8 {
+                var probe = t
+                while probe > t - gap + th, probe >= header, !prev.textured(probe..<(probe + th), cols: cols) { probe -= th / 2 }
+                if probe >= header, prev.textured(probe..<(probe + th), cols: cols) { strips.append(probe) }
+                t -= gap
+            }
+            guard !strips.isEmpty else { return .flat }
 
-            func score(_ y: Int) -> Int {   // mean diff of prev's strips vs next at the shift y implies, or nil when out of range
-                let d = top - y
+            func score(strip: Int, at y: Int) -> Int {   // mean diff of prev's strip vs next at row y
                 var total = 0, rows = 0
-                for r in 0..<th {
-                    total += prev.rowDiff(top + r, next, y + r, cols: cols)
+                for r in stride(from: 0, to: th, by: 2) {
+                    total += prev.rowDiff(strip + r, next, y + r, cols: cols)
                     rows += 1
-                }
-                if let second, second - d >= header {
-                    for r in 0..<th {
-                        total += prev.rowDiff(second + r, next, second - d + r, cols: cols)
-                        rows += 1
-                    }
                 }
                 return total / max(1, rows)
             }
-            var scores: [(y: Int, s: Int)] = []
-            for y in stride(from: header, through: top, by: 1) { scores.append((y, score(y))) }
-            guard let bestScore = scores.map(\.s).min(), bestScore <= 12 else {
-                // No match: if the scroll that was asked for carries the lowest textured strip off the top, what
-                // scrolled in below it was blank, so the shot is treated as flat (the scroll as sent is assumed)
-                return top - expected < header ? .flat : .unsure
+            // Each strip's best shift (0…1.5× the ask), when it matches well enough
+            var votes: [(d: Int, s: Int)] = []
+            let maxShift = max(expected * 3 / 2, th)
+            for strip in strips {
+                var scores: [(y: Int, s: Int)] = []
+                for y in stride(from: max(header, strip - maxShift), through: strip, by: 1) { scores.append((y, score(strip: strip, at: y))) }
+                guard let best = scores.map(\.s).min(), best <= 12 else { continue }
+                let ties = scores.filter { $0.s <= best + 1 }
+                let pick = ties.min { abs(strip - $0.y - expected) < abs(strip - $1.y - expected) }!
+                votes.append((strip - pick.y, best))
             }
-            // Near-ties: the one nearest the scroll that was asked for
-            let ties = scores.filter { $0.s <= bestScore + 1 }
-            let best = ties.min { abs(top - $0.y - expected) < abs(top - $1.y - expected) }!
-            let d = top - best.y
-            // Ambiguous (a repeating pattern): another good match far from this one, and no second strip to settle it
-            if second == nil, scores.contains(where: { $0.s <= bestScore + 3 && abs($0.y - best.y) > 3 }) { return .unsure }
+            if votes.isEmpty {
+                // Nothing found: if the ask carries the lowest strip off the top, what scrolled in below was blank
+                return strips[0] - expected < header ? .flat : .unsure
+            }
+            // The shift most strips agree on (within 2 rows)
+            var bestD = votes[0].d, bestCount = 0
+            for v in votes {
+                let n = votes.filter { abs($0.d - v.d) <= 2 }.count
+                if n > bestCount || (n == bestCount && abs(v.d - expected) < abs(bestD - expected)) { bestD = v.d; bestCount = n }
+            }
+            let agreed = votes.filter { abs($0.d - bestD) <= 2 }
+            // Alone against others, with no agreement: too risky to append on
+            if agreed.count < 2, votes.count >= 2 { return .unsure }
+            // The exact row: the agreeing strips scored together over the few candidates around their shift
+            var d = bestD, bestJoint = Int.max
+            for cand in (bestD - 2)...(bestD + 2) where cand >= 0 {
+                var total = 0, n = 0
+                for strip in strips where strip - cand >= header { total += score(strip: strip, at: strip - cand); n += 1 }
+                guard n > 0 else { continue }
+                let joint = total / n
+                if joint < bestJoint || (joint == bestJoint && abs(cand - expected) < abs(d - expected)) { bestJoint = joint; d = cand }
+            }
             return d <= 1 ? .still : .moved(d)
         }
     }
@@ -505,7 +588,7 @@ enum ScrollCapture {
         var text: String { get { label.stringValue } set { label.stringValue = newValue } }
 
         init(above area: CGRect) {
-            label = NSTextField(labelWithString: "Scrolling… move the mouse to stop")
+            label = NSTextField(labelWithString: "Scrolling… Esc or move the mouse to stop")
             label.font = .systemFont(ofSize: 13, weight: .medium)
             label.textColor = .white
             label.alignment = .center

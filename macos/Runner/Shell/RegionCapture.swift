@@ -514,23 +514,43 @@ private final class RegionView: NSView {
 
         let m = CGPoint(x: capture.mouse.x - origin.x, y: capture.mouse.y - origin.y)
 
-        // The scrolling capture, offered as a button near the top of the hovered window
+        // The scrolling capture, offered the way Snagit does it: a pulsing arrow at the bottom of the hovered window
         scrollButton = nil
         if !capture.isDragging, let f = focus, capture.offersScroll {
-            let text = "↕  Capture everything that scrolls"
+            let pulse = 1 + 0.06 * sin(Double(capture.antsPhase) / 10 * .pi)   // breathes with the ants timer
+            let radius = 22 * pulse
+            let centre = CGPoint(x: f.midX, y: max(f.minY + 64, min(f.maxY - 64, f.minY + 64)))
+            let text = "Capture everything scrollable"
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: NSColor.white]
             let ts = (text as NSString).size(withAttributes: attributes)
-            var r = CGRect(x: f.midX - (ts.width + 32) / 2, y: f.maxY - ts.height - 14 - 52, width: ts.width + 32, height: ts.height + 14)
-            if r.minY < f.minY + 8 { r.origin.y = f.midY - r.height / 2 }
-            let over = r.contains(m)
-            let pill = NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2)
-            (over ? Self.orange : NSColor(white: 0.12, alpha: 0.92)).setFill()
+            let label = CGRect(x: centre.x + radius + 10, y: centre.y - (ts.height + 12) / 2, width: ts.width + 24, height: ts.height + 12)
+            let circle = CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2)
+            let over = circle.contains(m) || label.contains(m)
+            // Halo, then the orange disc with a down arrow
+            NSColor.black.withAlphaComponent(0.35).setFill()
+            NSBezierPath(ovalIn: circle.insetBy(dx: -5, dy: -5)).fill()
+            (over ? NSColor(calibratedRed: 1, green: 0.72, blue: 0.2, alpha: 1) : Self.orange).setFill()
+            NSBezierPath(ovalIn: circle).fill()
+            NSColor.white.setStroke()
+            let ring = NSBezierPath(ovalIn: circle)
+            ring.lineWidth = 2
+            ring.stroke()
+            let arrow = NSBezierPath()
+            arrow.move(to: CGPoint(x: centre.x, y: centre.y + radius * 0.45))
+            arrow.line(to: CGPoint(x: centre.x, y: centre.y - radius * 0.4))
+            arrow.move(to: CGPoint(x: centre.x - radius * 0.38, y: centre.y - radius * 0.02))
+            arrow.line(to: CGPoint(x: centre.x, y: centre.y - radius * 0.4))
+            arrow.line(to: CGPoint(x: centre.x + radius * 0.38, y: centre.y - radius * 0.02))
+            arrow.lineWidth = 3.5
+            arrow.lineCapStyle = .round
+            arrow.lineJoinStyle = .round
+            arrow.stroke()
+            // The label beside it
+            let pill = NSBezierPath(roundedRect: label, xRadius: label.height / 2, yRadius: label.height / 2)
+            NSColor(white: 0.1, alpha: over ? 0.95 : 0.85).setFill()
             pill.fill()
-            NSColor.white.withAlphaComponent(0.7).setStroke()
-            pill.lineWidth = 1
-            pill.stroke()
-            (text as NSString).draw(at: CGPoint(x: r.minX + 16, y: r.minY + 7), withAttributes: attributes)
-            scrollButton = r
+            (text as NSString).draw(at: CGPoint(x: label.minX + 12, y: label.minY + 6), withAttributes: attributes)
+            scrollButton = circle.union(label)
         }
 
         guard bounds.contains(m) else { return }
