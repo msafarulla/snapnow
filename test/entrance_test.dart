@@ -59,4 +59,25 @@ void main() {
     expect(BuildUpGif.entrance, Entrance.draw, reason: 'turning Fourier off goes back to the plain draw-on');
     expect(BuildUpGif.appearing(arrow), BuildUpGif.lineDraw);
   });
+
+  test('String art while drawing: tangentFan paints the fan over the whole stroke', () async {
+    final a = Annotation(id: 1, color: const Color(0xFFE53935), size: StrokeSize.large,
+        shape: ArrowShape(const Offset(20, 180), const Offset(280, 30), points: const [Offset(120, 40)]));
+    Future<int> inked(void Function(Canvas) draw) async {
+      final rec = ui.PictureRecorder();
+      final c = Canvas(rec);
+      c.drawRect(const Rect.fromLTWH(0, 0, 300, 200), Paint()..color = Colors.white);
+      draw(c);
+      final img = await rec.endRecording().toImage(300, 200);
+      final px = (await img.toByteData(format: ui.ImageByteFormat.rawRgba))!.buffer.asUint8List();
+      var n = 0;
+      for (var i = 0; i < px.length; i += 4) {
+        if (px[i] < 250 || px[i + 1] < 250 || px[i + 2] < 250) n++;
+      }
+      return n;
+    }
+    final plain = await inked((c) => CanvasPainter.drawAnnotation(c, a));
+    final fanned = await inked((c) { CanvasPainter.drawAnnotation(c, a); CanvasPainter.tangentFan(c, a); });
+    expect(fanned - plain, greaterThan(2000), reason: 'the fan covers far more than the stroke');
+  });
 }

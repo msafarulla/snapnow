@@ -2575,6 +2575,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                         march: _march,
                         canvasResize: _canvasDrag?.$2,
                         fourier: BuildUpGif.fourier,
+                        envelope: BuildUpGif.envelope,
                         trail: _trail == null || _createCurrent == null ? null : [..._trail!, _createCurrent!],
                         guides: _guides,
                         boundsOfSelection: _textEdit != null || selected == null || selected!.rect != null ? null : _bounds(selected!),
@@ -3365,13 +3366,14 @@ class _PreviewPainter extends CustomPainter {
   final List<Rect>? groupBoxes; // ⌘A group peers: a thin accent outline round each (image coords)
   final List<Guide> guides;
   final bool fourier; // Fourier drawing: spinning circles trace the stroke as it's drawn
+  final bool envelope; // String art: the tangent fan follows the stroke as it's drawn
   final List<Offset>? trail; // the drag so far, every point (Fourier drawing traces it)
   final Rect? cropRect; // the pending Crop-tool region (image coords): dotted outline + draggable handles
 
   _PreviewPainter({required this.base, required this.origin, required this.tool, required this.color, required this.size,
       required this.scale, this.scaleY, required this.style, this.createStart, this.createCurrent, this.penPoints, this.follow,
       this.canvasChrome = false, this.ants, required this.march, this.canvasResize, this.boundsOfSelection, this.groupBoxes,
-      this.guides = const [], this.fourier = false, this.trail, this.cropRect})
+      this.guides = const [], this.fourier = false, this.envelope = false, this.trail, this.cropRect})
       : super(repaint: Listenable.merge([ants, march]));
 
   static const _accent = Color(0xFF2F7CF6);
@@ -3392,6 +3394,10 @@ class _PreviewPainter extends CustomPainter {
     Annotation ann(Shape s) => Annotation(id: -1, shape: s, color: color, size: this.size, arrowStyle: style, scale: base.state.density);
     // The stroke being drawn; with Fourier drawing on, its circles follow the pointer in real time
     void live(Annotation a) {
+      if (envelope && CanvasPainter.hasOutline(a)) {
+        CanvasPainter.drawAnnotation(canvas, a);
+        return CanvasPainter.tangentFan(canvas, a); // the string art builds under the pen
+      }
       if (!fourier) return CanvasPainter.drawAnnotation(canvas, a);
       CanvasPainter.drawAnnotation(canvas, Epicycles.fourierized(a)); // what you'll get: the curve the circles trace
       Epicycles.proper(a)?.paint(canvas, 1, color, scale); // the same circles that make that curve

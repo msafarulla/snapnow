@@ -202,8 +202,7 @@ class CanvasPainter extends CustomPainter {
     if (metrics.isEmpty) return;
     final total = metrics.fold(0.0, (sum, m) => sum + m.length);
     if (total <= 0) return;
-    final count = (total / 1.25).clamp(240, 960).round(); // tangents along the whole path
-    final half = (total * 0.22).clamp(28.0, 150.0); // each tangent reaches this far either side
+    final count = _fanCount(total);
     final frontier = Curves.easeInOut.transform(t);
     final shown = (frontier * count).floor();
     final fade = t > 0.86 ? ((1 - t) / 0.14).clamp(0.0, 1.0) : 1.0;
@@ -216,9 +215,26 @@ class CanvasPainter extends CustomPainter {
       strokeStyled(canvas, drawn, a.arrowStyle, a.color, w);
     }
     if (fade <= 0) return;
+    _fan(canvas, a, metrics, total, shown, count, fade);
+  }
+
+  /// String art while drawing: the tangents along the whole stroke so far, the newest (at the pen) brightest.
+  static void tangentFan(Canvas canvas, Annotation a) {
+    final metrics = outlinePath(a).computeMetrics().toList();
+    if (metrics.isEmpty) return;
+    final total = metrics.fold(0.0, (sum, m) => sum + m.length);
+    if (total <= 0) return;
+    final count = _fanCount(total);
+    _fan(canvas, a, metrics, total, count, count, 1);
+  }
+
+  static int _fanCount(double total) => (total / 1.25).clamp(240, 960).round(); // tangents along the whole path
+
+  static void _fan(Canvas canvas, Annotation a, List<ui.PathMetric> metrics, double total, int shown, int count, double fade) {
+    final half = (total * 0.22).clamp(28.0, 150.0); // each tangent reaches this far either side
     final line = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = math.max(0.7, w * 0.22)
+      ..strokeWidth = math.max(0.7, a.lineWidth * 0.22)
       ..strokeCap = StrokeCap.round;
     for (var i = 0; i < shown; i++) {
       final d = total * (i + 0.5) / count;

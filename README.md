@@ -253,7 +253,8 @@ selected or its tool is active) sets how lines, strokes and outlines appear in t
 on from start to end; **String art** lays thin lines tangent to the stroke down one after another along it,
 the newest bright and the rest faint, and the shape emerges as the string art they wrap, with the stroke itself
 filling in just behind; the lines fade as the shape completes and the arrowhead arrives with the finished arrow
-(best on curves, boxes and ellipses; a straight line has nothing to wrap). **Fourier** traces strokes with
+(best on curves, boxes and ellipses; a straight line has nothing to wrap). With String art chosen, the fan also
+builds live under the pen while you draw an arrow, line, box or ellipse. **Fourier** traces strokes with
 spinning circles (below). Select a stroke and click **Play** to preview the chosen entrance on the canvas. The
 choice is remembered.
 
