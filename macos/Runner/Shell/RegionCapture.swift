@@ -16,6 +16,28 @@ final class RegionCapture {
 
     private var frozen: [Frozen] = []
     private var windows: [CGRect] = []        // Cocoa global coordinates, front to back
+    private var windowApps: [String] = []     // the owning app's bundle id (or name) per window, same order
+
+    /// Apps whose windows get the scrolling-capture button: browsers and terminals ("for now just browsers and
+    /// terminals are fine for scroll feature", 2026-11-04). Matched on the bundle id, else the owner name.
+    private static let scrollApps: [String] = [
+        "com.google.chrome", "com.apple.safari", "org.mozilla.firefox", "company.thebrowser.browser", "com.microsoft.edgemac",
+        "com.brave.browser", "com.operasoftware.opera", "com.vivaldi.vivaldi", "org.chromium.chromium",
+        "com.mitchellh.ghostty", "com.apple.terminal", "com.googlecode.iterm2", "dev.warp.warp-stable", "net.kovidgoyal.kitty",
+        "org.alacritty", "co.zeit.hyper",
+    ]
+    private static let scrollAppWords = ["chrome", "safari", "firefox", "arc", "edge", "brave", "opera", "vivaldi", "chromium",
+                                         "ghostty", "terminal", "iterm", "warp", "kitty", "alacritty", "hyper"]
+    static func isScrollApp(_ id: String) -> Bool {
+        let lower = id.lowercased()
+        return scrollApps.contains(lower) || scrollAppWords.contains { lower == $0 || lower.hasSuffix(".\($0)") || lower.contains($0) }
+    }
+
+    /// The app owning the window under the cursor, when it is a browser or a terminal.
+    var hoveredScrollApp: String? {
+        guard let i = windows.firstIndex(where: { $0.contains(mouse) }), i < windowApps.count, Self.isScrollApp(windowApps[i]) else { return nil }
+        return windowApps[i]
+    }
     private var overlays: [NSWindow] = []
     private var views: [RegionView] = []
     private var completion: ((URL?) -> Void)?
@@ -40,11 +62,12 @@ final class RegionCapture {
         return found
     }
 
-    /// Whether the picker shows the scroll arrow: on every hovered window (and the remembered last area). Telling
-    /// scrollable windows apart through Accessibility proved unreliable (Chrome pages, YouTube, feeds), and an
-    /// arrow on a window that doesn't scroll costs nothing: the capture just ends with one shot.
+    /// Whether the picker shows the scroll arrow: on a hovered browser or terminal window. Telling scrollable
+    /// windows apart through Accessibility proved unreliable (Chrome pages, YouTube, feeds), and an arrow on every
+    /// window read as the picker marking things on its own, so it is limited to the apps where scrolling capture
+    /// is the point. S still works on any window.
     var offersScroll: Bool {
-        onPicked == nil && Self.scrollHandler != nil && !isDragging && (hoveredWindow != nil || overOffered)
+        onPicked == nil && Self.scrollHandler != nil && !isDragging && !overOffered && hoveredScrollApp != nil
     }
 
     /// Whether an AXScrollArea (or a web area) encloses the point (global Cocoa coordinates).
@@ -187,13 +210,16 @@ final class RegionCapture {
         let mainHeight = NSScreen.screens.first?.frame.height ?? 0
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let me = ProcessInfo.processInfo.processIdentifier
+        var apps: [String] = []
         windows = list.compactMap { w in
-            guard (w[kCGWindowLayer as String] as? Int) == 0, (w[kCGWindowOwnerPID as String] as? pid_t) != me,
+            guard (w[kCGWindowLayer as String] as? Int) == 0, let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != me,
                   (w[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b),
                   r.width > 40, r.height > 40 else { return nil }
+            apps.append(NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? (w[kCGWindowOwnerName as String] as? String) ?? "")
             return CGRect(x: r.minX, y: mainHeight - r.maxY, width: r.width, height: r.height)
         }
+        windowApps = apps
     }
 
     /// The same pixels with the alpha channel ignored: screencapture's BMP can come with alpha 0 everywhere,
@@ -441,8 +467,7 @@ private final class KeyPanel: NSPanel {
 
 private final class RegionView: NSView {
     private unowned let capture: RegionCapture
-    private var scrollButton: CGRect?   // "Capture everything that scrolls", on the hovered window (local coords)
-    private static let scrollButtonShown = false   // the pulsing arrow + label on hovered windows (see draw)
+    private var scrollButton: CGRect?   // "Capture everything that scrolls", on the hovered browser/terminal window (local coords)
     private var scrollButtonPressed = false
     private let frozen: RegionCapture.Frozen
     private static let orange = NSColor(srgbRed: 0.98, green: 0.62, blue: 0.13, alpha: 1)
@@ -527,12 +552,11 @@ private final class RegionView: NSView {
 
         let m = CGPoint(x: capture.mouse.x - origin.x, y: capture.mouse.y - origin.y)
 
-        // The scrolling capture used to be offered the way Snagit does it: a pulsing arrow with "Capture everything
-        // scrollable" on every hovered window. That marking read as the picker having picked something on its own
-        // ("it identifies the scrollable section and marks it, which is very confusing", 2026-11-04), so it is off:
-        // scrolling capture is the S key here, the menu item, or ⌃⇧S. Flip `scrollButtonShown` to bring it back.
+        // The scrolling capture, offered the way Snagit does it: a pulsing arrow with "Capture everything scrollable"
+        // on the hovered window, but only for browsers and terminals (`offersScroll`): on every window it read as
+        // the picker having picked something on its own (2026-11-04).
         scrollButton = nil
-        if Self.scrollButtonShown, !capture.isDragging, let f = focus, capture.offersScroll {
+        if !capture.isDragging, let f = focus, capture.offersScroll {
             let pulse = 1 + 0.06 * sin(Double(capture.antsPhase) / 10 * .pi)   // breathes with the ants timer
             let radius = 22 * pulse
             let centre = CGPoint(x: f.midX, y: max(f.minY + 64, min(f.maxY - 64, f.minY + 64)))
@@ -588,7 +612,7 @@ private final class RegionView: NSView {
         let loupeRect = drawLoupe(at: m, ctx: ctx, label: size)
         if capture.dragStart == nil {
             let last = capture.offered.map { "\nEnter or click inside the outline: last area (\(Int($0.width.rounded())) x \(Int($0.height.rounded())))" } ?? ""
-            let scroll = capture.offersScroll ? "\n↕ Scrolls? Press S to capture all of it" : ""
+            let scroll = capture.offersScroll ? "\n↕ S or the button captures all of it" : ""
             hint("Click, hold, and drag to select region" + last + scroll, beside: loupeRect)
         }
     }
