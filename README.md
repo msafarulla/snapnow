@@ -248,11 +248,18 @@ loops. It runs at 50 frames a second, with each line taking a little over a seco
 easy to follow (Settings › GIF frame rate picks 50, 25 or 15 frames a second; fewer make smaller files). Retina captures keep their full resolution (up to 3840 px on the long side), so text stays crisp. Good for showing a
 step-by-step in a chat or a ticket.
 
-**Fourier drawing.** Tick **Fourier drawing** in the style panel (it shows when an arrow, line, pen, box or
-ellipse is selected or its tool is active). From then on, while you draw a line, curve, pen stroke or outline, a
+**Entrance.** The style panel's **Entrance** choice (it shows when an arrow, line, pen, box or ellipse is
+selected or its tool is active) sets how lines, strokes and outlines appear in the GIF: **Draw** draws each one
+on from start to end; **String art** lays thin lines tangent to the stroke down one after another along it,
+the newest bright and the rest faint, and the shape emerges as the string art they wrap, with the stroke itself
+filling in just behind; the lines fade as the shape completes and the arrowhead arrives with the finished arrow
+(best on curves, boxes and ellipses; a straight line has nothing to wrap). **Fourier** traces strokes with
+spinning circles (below). Select a stroke and click **Play** to preview the chosen entrance on the canvas. The
+choice is remembered.
+
+**Fourier drawing.** Choose the **Fourier** entrance. From then on, while you draw a line, curve, pen stroke or outline, a
 chain of spinning circles follows it in real time, its tip on your pointer: the 3Blue1Brown epicycle effect,
-made inside SnapNow (no Manim needed). Select a finished stroke and click **Play** to watch the circles draw it
-from start to end. What you keep is exactly the curve the circles trace: a proper Fourier curve: the straight line
+made inside SnapNow (no Manim needed). Select a finished stroke and click **Play** to watch the circles draw it from start to end. What you keep is exactly the curve the circles trace: a proper Fourier curve: the straight line
 from start to end plus a few smooth sine waves, softened at the top so nothing ripples (a shaky hand can't put
 a wobble or a hook in it), with its ends right where you
 pressed and let go, and a straight drag stays perfectly straight. Animated GIFs use

@@ -23,11 +23,13 @@ class CanvasPainter extends CustomPainter {
   final ValueListenable<double>? march;
   /// For the build-up GIF: spinning Fourier circles trace lines, pen strokes and outlines as they draw on.
   final bool epicycles;
+  /// For the build-up GIF: lines, strokes and outlines appear as the envelope of their tangent lines (string art).
+  final bool envelope;
 
   /// [animate] makes the painter repaint on every [march] tick: only wanted when a committed annotation
   /// actually marches, so the editor's cached picture layer isn't re-rasterised 25× a second for nothing.
   CanvasPainter({required this.state, required this.selectionId, required this.scale, this.scaleY, this.hiddenTextId,
-      this.progress, this.march, this.epicycles = false, bool animate = false})
+      this.progress, this.march, this.epicycles = false, this.envelope = false, bool animate = false})
       : super(repaint: animate ? march : null);
 
   double get _sy => scaleY ?? scale; // vertical scale, == scale unless a non-proportional editor resize set it
@@ -92,7 +94,7 @@ class CanvasPainter extends CustomPainter {
         case StepShape():
           drawPartial(canvas, a, t, number: step);
         default:
-          drawPartial(canvas, a, t, hideText: a.id == hiddenTextId);
+          drawPartial(canvas, a, t, hideText: a.id == hiddenTextId, envelope: envelope);
           if (epicycles && t < 1) Epicycles.of(a)?.paint(canvas, Curves.easeInOut.transform(t), a.color, scale);
       }
     }
@@ -146,9 +148,12 @@ class CanvasPainter extends CustomPainter {
 
   /// An annotation part-way through appearing (`t` 0…1, for the build-up GIF): lines and outlines draw
   /// themselves on, highlights wipe across, steps and callouts pop in, everything else fades in.
-  static void drawPartial(Canvas canvas, Annotation a, double t, {int number = 0, ui.Image? base, bool hideText = false}) {
+  /// With [envelope], lines, strokes and outlines appear as the string art of their tangents instead.
+  static void drawPartial(Canvas canvas, Annotation a, double t,
+      {int number = 0, ui.Image? base, bool hideText = false, bool envelope = false}) {
     if (t >= 1) return drawAnnotation(canvas, a, number: number, base: base, hideText: hideText);
     if (t <= 0) return;
+    if (envelope && hasOutline(a)) return tangentEnvelope(canvas, a, t);
     final w = a.lineWidth, along = Curves.easeInOut.transform(t);
     switch (a.shape) {
       case ArrowShape() || LineShape():
@@ -181,6 +186,59 @@ class CanvasPainter extends CustomPainter {
         PenShape(:final points) => _smooth(points),
         _ => Path(),
       };
+
+  /// Whether an annotation is drawn along a line (arrow, line, pen stroke, box, ellipse): what [outlinePath]
+  /// covers and the tangent envelope can build.
+  static bool hasOutline(Annotation a) =>
+      a.shape is ArrowShape || a.shape is LineShape || a.shape is PenShape || a.shape is RectShape || a.shape is EllipseShape;
+
+  /// A line, stroke or outline part-way through appearing as the envelope of its tangents, `t` 0…1: thin
+  /// lines tangent to the path are laid down one after another along it (the newest few bright, the rest
+  /// faint) and the shape emerges as the string art they wrap; the stroke itself follows a little behind the
+  /// newest tangent. The fan fades over the last stretch, and the heads come with the finished shape at t = 1.
+  static void tangentEnvelope(Canvas canvas, Annotation a, double t) {
+    final w = a.lineWidth;
+    final metrics = outlinePath(a).computeMetrics().toList();
+    if (metrics.isEmpty) return;
+    final total = metrics.fold(0.0, (sum, m) => sum + m.length);
+    if (total <= 0) return;
+    final count = (total / 11).clamp(28, 110).round(); // tangents along the whole path
+    final half = (total * 0.22).clamp(28.0, 150.0); // each tangent reaches this far either side
+    final frontier = Curves.easeInOut.transform(t);
+    final shown = (frontier * count).floor();
+    final fade = t > 0.86 ? ((1 - t) / 0.14).clamp(0.0, 1.0) : 1.0;
+    final along = ((frontier - 0.08) / 0.86).clamp(0.0, 1.0);
+    if (along > 0) {
+      final drawn = Path();
+      for (final m in metrics) {
+        drawn.addPath(m.extractPath(0, m.length * along), Offset.zero);
+      }
+      strokeStyled(canvas, drawn, a.arrowStyle, a.color, w);
+    }
+    if (fade <= 0) return;
+    final line = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(0.7, w * 0.22)
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < shown; i++) {
+      final d = total * (i + 0.5) / count;
+      var base = 0.0;
+      ui.Tangent? tangent;
+      for (final m in metrics) {
+        if (d <= base + m.length) {
+          tangent = m.getTangentForOffset(d - base);
+          break;
+        }
+        base += m.length;
+      }
+      if (tangent == null || tangent.vector.distance == 0) continue;
+      final age = shown - i; // 1 = the newest
+      final alpha = (age <= 6 ? 0.85 - 0.09 * (age - 1) : 0.3) * fade;
+      line.color = a.color.withValues(alpha: alpha);
+      final v = tangent.vector / tangent.vector.distance * half;
+      canvas.drawLine(tangent.position - v, tangent.position + v, line);
+    }
+  }
 
   /// The first `fraction` of `path`, by length.
   static Path _drawnOn(Path path, double fraction) {
@@ -871,7 +929,8 @@ class CanvasPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CanvasPainter old) =>
       old.state != state || old.selectionId != selectionId || old.scale != scale || old.scaleY != scaleY ||
-      old.hiddenTextId != hiddenTextId || old.progress != progress || old.march != march || old.epicycles != epicycles;
+      old.hiddenTextId != hiddenTextId || old.progress != progress || old.march != march || old.epicycles != epicycles ||
+      old.envelope != envelope;
 }
 
 /// The kinds of handle on a selected arrow or line.
