@@ -33,6 +33,9 @@ enum Prefs {
     static func onByDefault(_ key: String) -> Bool {
         UserDefaults.standard.object(forKey: key) == nil ? true : UserDefaults.standard.bool(forKey: key)
     }
+
+    /// A bool pref that is off until the user turns it on (the picker's remembered last area, 2026-11-04).
+    static func offByDefault(_ key: String) -> Bool { UserDefaults.standard.bool(forKey: key) }
 }
 
 /// Which tools get a toolbar button; the rest are under More.
@@ -138,7 +141,7 @@ final class SettingsWindowController: NSWindowController {
                                           action: #selector(prefToggled(_:)), key: Prefs.copyImage))
         stack.addArrangedSubview(checkbox("Record the microphone with screen recordings", on: defaults.bool(forKey: Prefs.microphone),
                                           action: #selector(prefToggled(_:)), key: Prefs.microphone))
-        stack.addArrangedSubview(checkbox("Remember the last capture area (Enter re-captures it)", on: Prefs.onByDefault(Prefs.rememberArea),
+        stack.addArrangedSubview(checkbox("Remember the last capture area (Enter re-captures it)", on: Prefs.offByDefault(Prefs.rememberArea),
                                           action: #selector(prefToggled(_:)), key: Prefs.rememberArea))
         stack.addArrangedSubview(checkbox("Stamp the date & time on captures (bottom-right)", on: Prefs.onByDefault(Prefs.stampTime),
                                           action: #selector(prefToggled(_:)), key: Prefs.stampTime))

@@ -312,7 +312,7 @@ final class RegionCapture {
     /// What a click would capture right now (or the selection while dragging).
     /// The last area, offered again: shown outlined, and Enter or a click inside it captures it — unless the
     /// "Remember the last capture area" setting is off.
-    lazy var offered: CGRect? = Prefs.onByDefault(Prefs.rememberArea) ? Self.lastArea : nil
+    lazy var offered: CGRect? = Prefs.offByDefault(Prefs.rememberArea) ? Self.lastArea : nil
 
     /// The cursor is over the offered last area (so a click takes it, not the window under it).
     var overOffered: Bool { offered.map { $0.contains(mouse) } ?? false }
