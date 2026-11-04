@@ -512,10 +512,10 @@ void main() {
     await tester.tap(find.text('Arrow').first);
     await tester.pump();
     editor.setFollowDrag(true);
-    editor.setGifEntrance(Entrance.fourier);
-    addTearDown(() => BuildUpGif.entrance = Entrance.draw);
+    editor.setGifFourier(true);
+    addTearDown(() => BuildUpGif.fourier = false);
     await tester.pump();
-    expect(find.text('Fourier'), findsOneWidget, reason: 'the Entrance choice is in the panel');
+    expect(find.text('Fourier drawing'), findsOneWidget, reason: 'the option is in the panel');
     dynamic preview() => tester.widgetList<CustomPaint>(find.byType(CustomPaint))
         .map((c) => c.painter).firstWhere((p) => p.runtimeType.toString() == '_PreviewPainter');
     CanvasPainter painter() => preview().base as CanvasPainter;

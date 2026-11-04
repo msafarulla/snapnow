@@ -146,12 +146,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     _makeBlankCanvas(1200, 800);
     _loadPrefs();
     Native.getBool('followDrag').then((on) { if (mounted && on != null) setState(() => _followDrag = on); });
-    Native.getString('gifEntrance').then((v) async {
-      var e = Entrance.values.where((e) => e.name == v).firstOrNull;
-      e ??= (await Native.getBool('gifFourier')) == true ? Entrance.fourier : null; // the older on/off setting
-      if (mounted && e != null) setState(() => BuildUpGif.entrance = e!);
-    });
-    Native.getBool('gifSpring').then((on) { if (mounted && on != null) setState(() => BuildUpGif.spring = on); });
+    Native.getBool('gifFourier').then((on) { if (mounted && on != null) setState(() => BuildUpGif.fourier = on); });
     Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });
     Native.getBool('pinOnTop').then((on) { if (on == true && !_pinTouched) _setPinned(true, save: false); });
     Native.getBool('inspector.hidden').then((hidden) { if (mounted && hidden == true) setState(() => _inspectorShown = false); });
@@ -278,11 +273,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   /// Marching Ants lines run while any annotation uses them (one dash cycle every 0.8 s).
   final _march = ValueNotifier<double>(0);
   Timer? _marchTimer;
-  /// Play: the annotation being watched appearing (drawn on, led by a comet or traced by Fourier circles),
-  /// and how far (0…1).
-  int? _playId;
-  double _playT = 1;
-  Timer? _playTimer;
+  /// Fourier drawing: the annotation being drawn on by spinning circles, and how far (0…1).
+  int? _fourierId;
+  double _fourierT = 1;
+  Timer? _fourierTimer;
   /// Resizing the canvas by its square handles: handle index, new rect (image coords), grab offset.
   (int, Rect, Offset)? _canvasDrag;
   double _viewScale = 1; // view points per image point (x), from the last layout
@@ -573,7 +567,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   void dispose() {
     _antsTimer?.cancel();
     _marchTimer?.cancel();
-    _playTimer?.cancel();
+    _fourierTimer?.cancel();
     _march.dispose();
     super.dispose();
   }
@@ -699,7 +693,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   /// `p` is in image coordinates and may lie outside the image (the canvas area around it).
   void _down(Offset p) {
-    _stopPlay();
+    _stopFourier();
     if (_textEdit != null) { _endTextEdit(); return; } // a click elsewhere keeps the typed text
     final now = DateTime.now();
     final doubleClick = now.difference(_lastDown).inMilliseconds < 400 && (p - _lastDownPoint).distance * _viewScale < 6;
@@ -1031,39 +1025,34 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     setState(() { _selection = a.id; _group.clear(); });
   }
 
-  /// Shows `a` appearing as the GIF would (Play): drawn on, led by a comet, or traced by Fourier circles
-  /// (while drawing with Fourier on, the circles follow live).
-  void _playEntrance(Annotation a) {
-    if (!_canPlay(a)) return;
-    _playTimer?.cancel();
+  /// Draws `a` on with Fourier circles, as the GIF does (Play; while drawing, the circles follow live).
+  void _playFourier(Annotation a) {
+    if (Epicycles.of(a) == null) return;
+    _fourierTimer?.cancel();
     final start = DateTime.now();
-    final length = BuildUpGif.fourier ? 1800 : BuildUpGif.appearing(a).inMilliseconds;
-    setState(() { _playId = a.id; _playT = 0; });
-    _playTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
+    const length = 1800;
+    setState(() { _fourierId = a.id; _fourierT = 0; });
+    _fourierTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
       final t = DateTime.now().difference(start).inMilliseconds / length;
-      if (t >= 1 || !mounted) return _stopPlay();
-      setState(() => _playT = t);
+      if (t >= 1 || !mounted) return _stopFourier();
+      setState(() => _fourierT = t);
     });
   }
 
-  void _stopPlay() {
-    if (_playId == null) return;
-    _playTimer?.cancel();
-    _playTimer = null;
-    if (mounted) setState(() => _playId = null);
+  void _stopFourier() {
+    if (_fourierId == null) return;
+    _fourierTimer?.cancel();
+    _fourierTimer = null;
+    if (mounted) setState(() => _fourierId = null);
   }
 
-  static bool _canPlay(Annotation a) => BuildUpGif.fourier
-      ? Epicycles.of(a) != null
-      : a.shape is ArrowShape || a.shape is LineShape || a.shape is RectShape || a.shape is EllipseShape || a.shape is PenShape;
+  @override
+  bool get canPlayFourier => selected != null && Epicycles.of(selected!) != null;
 
   @override
-  bool get canPlayEntrance => selected != null && _canPlay(selected!);
-
-  @override
-  void playEntrance() {
+  void playFourier() {
     final a = selected;
-    if (a != null) _playEntrance(a);
+    if (a != null) _playFourier(a);
   }
 
   void _replace(Annotation a, {bool snapshot = true}) {
@@ -2552,18 +2541,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                         child: ClipRect(child: RepaintBoundary(child: CustomPaint(
                           isComplex: true,
                           painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY,
-                              hiddenTextId: _textEdit?.id, march: _march, epicycles: _playId != null && BuildUpGif.fourier,
-                              comet: _playId != null && BuildUpGif.entrance == Entrance.comet, spring: _playId != null && BuildUpGif.spring,
+                              hiddenTextId: _textEdit?.id, march: _march, epicycles: _fourierId != null,
                               animate: state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches),
-                              progress: _playId == null ? null : {for (final a in state.annotations) a.id: a.id == _playId ? _playT : 1.0}),
+                              progress: _fourierId == null ? null : {for (final a in state.annotations) a.id: a.id == _fourierId ? _fourierT : 1.0}),
                         ))),
                       ),
                       Positioned.fill(child: CustomPaint(
                       painter: _PreviewPainter(
-                        base: CanvasPainter(state: state, selectionId: _playId == null ? _selection : null, scale: scale, scaleY: scaleY,
-                            hiddenTextId: _textEdit?.id, march: _march, epicycles: _playId != null && BuildUpGif.fourier,
-                              comet: _playId != null && BuildUpGif.entrance == Entrance.comet, spring: _playId != null && BuildUpGif.spring,
-                            progress: _playId == null ? null : {for (final a in state.annotations) a.id: a.id == _playId ? _playT : 1.0}),
+                        base: CanvasPainter(state: state, selectionId: _fourierId == null ? _selection : null, scale: scale, scaleY: scaleY,
+                            hiddenTextId: _textEdit?.id, march: _march, epicycles: _fourierId != null,
+                            progress: _fourierId == null ? null : {for (final a in state.annotations) a.id: a.id == _fourierId ? _fourierT : 1.0}),
                         origin: origin,
                         tool: _tool, color: _color, size: _size, scale: scale, scaleY: scaleY,
                         style: kind == null ? ArrowStyle.arrow : _styleFor(kind),
@@ -2803,21 +2790,12 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   @override
-  Entrance get gifEntrance => BuildUpGif.entrance;
+  bool get gifFourier => BuildUpGif.fourier;
 
   @override
-  void setGifEntrance(Entrance e) {
-    setState(() => BuildUpGif.entrance = e);
-    Native.setString('gifEntrance', e.name);
-  }
-
-  @override
-  bool get gifSpring => BuildUpGif.spring;
-
-  @override
-  void setGifSpring(bool on) {
-    setState(() => BuildUpGif.spring = on);
-    Native.setBool('gifSpring', on);
+  void setGifFourier(bool on) {
+    setState(() => BuildUpGif.fourier = on);
+    Native.setBool('gifFourier', on);
   }
 
   @override
