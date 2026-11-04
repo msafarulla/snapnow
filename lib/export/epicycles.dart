@@ -159,8 +159,8 @@ class Epicycles {
   /// Draws the circles and their arms — all neutral grey, no annotation colour, dim so the stroke being drawn
   /// stands out (`color` is kept for the signature but intentionally unused). `scale` is output pixels per
   /// image point, to keep lines thin.
-  /// How much ink the circles, arms and tip get: 1 = the original look; 0.4 = 60% lighter (chosen 2026-11-04).
-  static const weight = 0.4;
+  /// How much ink the circles, arms and tip get: 1 = the original look; 0.2 = 80% lighter (chosen 2026-11-04).
+  static const weight = 0.2;
 
   void paint(Canvas canvas, double along, Color color, double scale) {
     final c = chain(along);
