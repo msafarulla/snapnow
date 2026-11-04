@@ -202,7 +202,7 @@ class CanvasPainter extends CustomPainter {
     if (metrics.isEmpty) return;
     final total = metrics.fold(0.0, (sum, m) => sum + m.length);
     if (total <= 0) return;
-    final count = (total / 2.5).clamp(120, 480).round(); // tangents along the whole path
+    final count = (total / 1.25).clamp(240, 960).round(); // tangents along the whole path
     final half = (total * 0.22).clamp(28.0, 150.0); // each tangent reaches this far either side
     final frontier = Curves.easeInOut.transform(t);
     final shown = (frontier * count).floor();
@@ -233,7 +233,7 @@ class CanvasPainter extends CustomPainter {
       }
       if (tangent == null || tangent.vector.distance == 0) continue;
       final age = shown - i; // 1 = the newest
-      final alpha = (age <= 16 ? 0.75 - 0.04 * (age - 1) : 0.15) * fade;
+      final alpha = (age <= 24 ? 0.7 - 0.025 * (age - 1) : 0.1) * fade;
       line.color = a.color.withValues(alpha: alpha);
       final v = tangent.vector / tangent.vector.distance * half;
       canvas.drawLine(tangent.position - v, tangent.position + v, line);
