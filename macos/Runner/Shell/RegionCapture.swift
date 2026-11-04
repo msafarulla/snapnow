@@ -442,6 +442,7 @@ private final class KeyPanel: NSPanel {
 private final class RegionView: NSView {
     private unowned let capture: RegionCapture
     private var scrollButton: CGRect?   // "Capture everything that scrolls", on the hovered window (local coords)
+    private static let scrollButtonShown = false   // the pulsing arrow + label on hovered windows (see draw)
     private var scrollButtonPressed = false
     private let frozen: RegionCapture.Frozen
     private static let orange = NSColor(srgbRed: 0.98, green: 0.62, blue: 0.13, alpha: 1)
@@ -526,9 +527,12 @@ private final class RegionView: NSView {
 
         let m = CGPoint(x: capture.mouse.x - origin.x, y: capture.mouse.y - origin.y)
 
-        // The scrolling capture, offered the way Snagit does it: a pulsing arrow at the bottom of the hovered window
+        // The scrolling capture used to be offered the way Snagit does it: a pulsing arrow with "Capture everything
+        // scrollable" on every hovered window. That marking read as the picker having picked something on its own
+        // ("it identifies the scrollable section and marks it, which is very confusing", 2026-11-04), so it is off:
+        // scrolling capture is the S key here, the menu item, or ⌃⇧S. Flip `scrollButtonShown` to bring it back.
         scrollButton = nil
-        if !capture.isDragging, let f = focus, capture.offersScroll {
+        if Self.scrollButtonShown, !capture.isDragging, let f = focus, capture.offersScroll {
             let pulse = 1 + 0.06 * sin(Double(capture.antsPhase) / 10 * .pi)   // breathes with the ants timer
             let radius = 22 * pulse
             let centre = CGPoint(x: f.midX, y: max(f.minY + 64, min(f.maxY - 64, f.minY + 64)))
@@ -584,7 +588,7 @@ private final class RegionView: NSView {
         let loupeRect = drawLoupe(at: m, ctx: ctx, label: size)
         if capture.dragStart == nil {
             let last = capture.offered.map { "\nEnter or click inside the outline: last area (\(Int($0.width.rounded())) x \(Int($0.height.rounded())))" } ?? ""
-            let scroll = capture.offersScroll ? "\n↕ Scrolls? S or the button captures all of it" : ""
+            let scroll = capture.offersScroll ? "\n↕ Scrolls? Press S to capture all of it" : ""
             hint("Click, hold, and drag to select region" + last + scroll, beside: loupeRect)
         }
     }
