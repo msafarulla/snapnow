@@ -23,13 +23,15 @@ class CanvasPainter extends CustomPainter {
   final ValueListenable<double>? march;
   /// For the build-up GIF: spinning Fourier circles trace lines, pen strokes and outlines as they draw on.
   final bool epicycles;
-  /// For the build-up GIF: arrows and lines appear by their Bézier construction (de Casteljau).
-  final bool bezier;
+  /// For the build-up GIF: a glowing comet head with a short tail leads each line as it draws on.
+  final bool comet;
+  /// For the build-up GIF: arrows and lines overshoot at the tip and settle once drawn.
+  final bool spring;
 
   /// [animate] makes the painter repaint on every [march] tick: only wanted when a committed annotation
   /// actually marches, so the editor's cached picture layer isn't re-rasterised 25× a second for nothing.
   CanvasPainter({required this.state, required this.selectionId, required this.scale, this.scaleY, this.hiddenTextId,
-      this.progress, this.march, this.epicycles = false, this.bezier = false, bool animate = false})
+      this.progress, this.march, this.epicycles = false, this.comet = false, this.spring = false, bool animate = false})
       : super(repaint: animate ? march : null);
 
   double get _sy => scaleY ?? scale; // vertical scale, == scale unless a non-proportional editor resize set it
@@ -94,7 +96,7 @@ class CanvasPainter extends CustomPainter {
         case StepShape():
           drawPartial(canvas, a, t, number: step);
         default:
-          drawPartial(canvas, a, t, hideText: a.id == hiddenTextId, bezier: bezier);
+          drawPartial(canvas, a, t, hideText: a.id == hiddenTextId, comet: comet, spring: spring);
           if (epicycles && t < 1) Epicycles.of(a)?.paint(canvas, Curves.easeInOut.transform(t), a.color, scale);
       }
     }
@@ -148,24 +150,40 @@ class CanvasPainter extends CustomPainter {
 
   /// An annotation part-way through appearing (`t` 0…1, for the build-up GIF): lines and outlines draw
   /// themselves on, highlights wipe across, steps and callouts pop in, everything else fades in.
-  /// With [bezier], arrows and lines appear by their Bézier construction instead.
+  /// With [comet] a glowing head leads the line; with [spring] an arrow or line draws on in the first three
+  /// quarters of its time, then its tip overshoots and settles.
   static void drawPartial(Canvas canvas, Annotation a, double t,
-      {int number = 0, ui.Image? base, bool hideText = false, bool bezier = false}) {
+      {int number = 0, ui.Image? base, bool hideText = false, bool comet = false, bool spring = false}) {
     if (t >= 1) return drawAnnotation(canvas, a, number: number, base: base, hideText: hideText);
     if (t <= 0) return;
     final w = a.lineWidth, along = Curves.easeInOut.transform(t);
     switch (a.shape) {
-      case ArrowShape() || LineShape() when bezier:
-        bezierConstruction(canvas, a, t);
+      case ArrowShape() || LineShape() when spring:
+        const drawn = 0.75; // the share of the time spent drawing on; the rest is the settle
+        if (t < drawn) {
+          final u = t / drawn, along = Curves.easeInOut.transform(u);
+          final pts = partialCurve(a.curve!, a.curveTangents, along);
+          if (pts != null) drawArrow(canvas, pts, a.arrowStyle, a.color, w);
+          if (comet) _comet(canvas, outlinePath(a), along, a.color, w, _cometFade(u));
+        } else {
+          drawArrow(canvas, sprung(a, (t - drawn) / (1 - drawn)), a.arrowStyle, a.color, w, tangents: a.curveTangents);
+        }
       case ArrowShape() || LineShape():
         final pts = partialCurve(a.curve!, a.curveTangents, along);
         if (pts != null) drawArrow(canvas, pts, a.arrowStyle, a.color, w);
+        if (comet) _comet(canvas, outlinePath(a), along, a.color, w, _cometFade(t));
       case RectShape(:final rect):
-        strokeStyled(canvas, _drawnOn(Path()..addRRect(RRect.fromRectXY(rect, 2, 2)), along), a.arrowStyle, a.color, w);
+        final path = Path()..addRRect(RRect.fromRectXY(rect, 2, 2));
+        strokeStyled(canvas, _drawnOn(path, along), a.arrowStyle, a.color, w);
+        if (comet) _comet(canvas, path, along, a.color, w, _cometFade(t));
       case EllipseShape(:final rect):
-        strokeStyled(canvas, _drawnOn(Path()..addOval(rect), along), a.arrowStyle, a.color, w);
+        final path = Path()..addOval(rect);
+        strokeStyled(canvas, _drawnOn(path, along), a.arrowStyle, a.color, w);
+        if (comet) _comet(canvas, path, along, a.color, w, _cometFade(t));
       case PenShape(:final points):
-        strokeStyled(canvas, _drawnOn(_smooth(points), along), a.arrowStyle, a.color, w);
+        final path = _smooth(points);
+        strokeStyled(canvas, _drawnOn(path, along), a.arrowStyle, a.color, w);
+        if (comet) _comet(canvas, path, along, a.color, w, _cometFade(t));
       case HighlightShape(:final rect):
         drawAnnotation(canvas, a.withRect(Rect.fromLTWH(rect.left, rect.top, rect.width * along, rect.height)));
       case StepShape(:final center):
@@ -188,69 +206,72 @@ class CanvasPainter extends CustomPainter {
         _ => Path(),
       };
 
-  /// An arrow or line part-way through its Bézier construction (de Casteljau), `t` 0…1: the control polygon
-  /// of its spline in grey, then for the piece being drawn the points sliding along the polygon and the lines
-  /// between them, two levels down to the single point that traces the curve; the curve so far is the piece's
-  /// left half exactly (its control points are the construction's first points), so the pen never drifts.
-  /// Time is shared out over the pieces by chord length. The scaffolding fades over the last stretch; the heads
-  /// come with the finished arrow at t = 1.
-  static void bezierConstruction(Canvas canvas, Annotation a, double t) {
-    final w = a.lineWidth, along = Curves.easeInOut.transform(t);
-    final segs = spline(a.curve!, a.curveTangents);
-    if (segs.isEmpty) return;
-    final lens = [for (final (p0, _, _, p3) in segs) math.max(1e-3, (p3 - p0).distance)];
-    var left = along * lens.fold(0.0, (sum, l) => sum + l), i = 0;
-    while (i < segs.length - 1 && left > lens[i]) {
-      left -= lens[i];
-      i++;
-    }
-    final u = (left / lens[i]).clamp(0.0, 1.0);
-    final (p0, p1, p2, p3) = segs[i];
-    Offset at(Offset x, Offset y) => Offset.lerp(x, y, u)!;
-    final q0 = at(p0, p1), q1 = at(p1, p2), q2 = at(p2, p3);
-    final r0 = at(q0, q1), r1 = at(q1, q2);
-    final s = at(r0, r1);
+  /// The comet fades out over the last stretch of the draw-on, so it is gone when the line is complete.
+  static double _cometFade(double t) => t > 0.82 ? ((1 - t) / 0.18).clamp(0.0, 1.0) : 1;
 
-    final body = Path()..moveTo(segs.first.$1.dx, segs.first.$1.dy);
-    for (var j = 0; j < i; j++) {
-      final (_, c1, c2, b) = segs[j];
-      body.cubicTo(c1.dx, c1.dy, c2.dx, c2.dy, b.dx, b.dy);
-    }
-    body.cubicTo(q0.dx, q0.dy, r0.dx, r0.dy, s.dx, s.dy);
-    strokeStyled(canvas, body, a.arrowStyle, a.color, w);
-
-    final fade = t > 0.88 ? ((1 - t) / 0.12).clamp(0.0, 1.0) : 1.0;
+  /// A glowing head with a short tail, at the tip of the first `along` of `path` (by length).
+  static void _comet(Canvas canvas, Path path, double along, Color color, double w, double fade) {
     if (fade <= 0) return;
-    final thin = math.max(0.8, w * 0.3);
-    final grey = Paint()
-      ..color = const Color(0xFF8A8A8A).withValues(alpha: 0.6 * fade)
+    final metrics = path.computeMetrics().toList();
+    if (metrics.isEmpty) return;
+    final total = metrics.fold(0.0, (sum, m) => sum + m.length);
+    if (total <= 0) return;
+    final head = total * along, tail = math.min(total * 0.2, math.max(w * 12, 48.0));
+    const pieces = 5; // the tail brightens and thickens toward the head
+    final glow = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = thin;
-    final poly = Path();
-    for (final (a0, c1, c2, b) in segs) {
-      poly.moveTo(a0.dx, a0.dy);
-      poly.lineTo(c1.dx, c1.dy);
-      poly.lineTo(c2.dx, c2.dy);
-      poly.lineTo(b.dx, b.dy);
+      ..strokeCap = StrokeCap.round
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 1.5);
+    for (var i = 0; i < pieces; i++) {
+      final from = head - tail * (pieces - i) / pieces, to = head - tail * (pieces - i - 1) / pieces;
+      if (to <= 0) continue;
+      glow
+        ..color = color.withValues(alpha: 0.45 * fade * (i + 1) / pieces)
+        ..strokeWidth = w * (1.2 + 1.6 * (i + 1) / pieces);
+      canvas.drawPath(_extract(metrics, math.max(0, from), to), glow);
     }
-    canvas.drawPath(poly, grey);
-    final greyDot = Paint()..color = const Color(0xFF8A8A8A).withValues(alpha: 0.85 * fade);
-    for (final (a0, c1, c2, b) in segs) {
-      for (final p in [a0, c1, c2, b]) {
-        canvas.drawCircle(p, w * 0.55, greyDot);
-      }
+    final tip = _pointAt(metrics, head);
+    if (tip == null) return;
+    canvas.drawCircle(tip, w * 2.4, Paint()..color = color.withValues(alpha: 0.8 * fade)..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 1.3));
+    canvas.drawCircle(tip, w * 0.95, Paint()..color = Colors.white.withValues(alpha: 0.95 * fade));
+  }
+
+  /// The piece of a (possibly multi-contour) path between two distances along it.
+  static Path _extract(List<ui.PathMetric> metrics, double from, double to) {
+    final out = Path();
+    var base = 0.0;
+    for (final m in metrics) {
+      final a = (from - base).clamp(0.0, m.length), b = (to - base).clamp(0.0, m.length);
+      if (b > a) out.addPath(m.extractPath(a, b), Offset.zero);
+      base += m.length;
     }
-    canvas.drawPath(
-        Path()..moveTo(q0.dx, q0.dy)..lineTo(q1.dx, q1.dy)..lineTo(q2.dx, q2.dy),
-        Paint()..color = a.color.withValues(alpha: 0.5 * fade)..style = PaintingStyle.stroke..strokeWidth = math.max(0.8, w * 0.35));
-    canvas.drawLine(r0, r1,
-        Paint()..color = a.color.withValues(alpha: 0.8 * fade)..style = PaintingStyle.stroke..strokeWidth = math.max(0.8, w * 0.4));
-    final ink = Paint()..color = a.color.withValues(alpha: fade);
-    for (final p in [q0, q1, q2, r0, r1]) {
-      canvas.drawCircle(p, w * 0.6, ink);
+    return out;
+  }
+
+  static Offset? _pointAt(List<ui.PathMetric> metrics, double at) {
+    var base = 0.0;
+    for (final m in metrics) {
+      if (at <= base + m.length) return m.getTangentForOffset((at - base).clamp(0.0, m.length))?.position;
+      base += m.length;
     }
-    canvas.drawCircle(s, w * 1.2, ink);
-    canvas.drawCircle(s, w * 0.55, Paint()..color = Colors.white.withValues(alpha: fade));
+    final last = metrics.last;
+    return last.getTangentForOffset(last.length)?.position;
+  }
+
+  /// An arrow's points with its tip sprung: `s` 0…1 through the settle, the tip overshoots along its own
+  /// direction, swings back and comes to rest exactly where it was drawn (a damped bounce).
+  static List<Offset> sprung(Annotation a, double s) {
+    final pts = a.curve!;
+    final samples = curveSamples(pts, tangents: a.curveTangents, perSegment: 8);
+    final end = pts.last;
+    final prev = samples.length >= 2 ? samples[samples.length - 2] : pts.first;
+    final d = end - prev;
+    if (d.distance < 0.01 || s >= 1) return pts;
+    final u = d / d.distance;
+    final reach = (end - pts.first).distance;
+    final amp = (reach * 0.07).clamp(a.lineWidth * 1.5, a.lineWidth * 7);
+    final off = amp * math.exp(-3 * s) * math.sin(2 * math.pi * s);
+    return [...pts.sublist(0, pts.length - 1), end + u * off];
   }
 
   /// The first `fraction` of `path`, by length.
@@ -943,7 +964,7 @@ class CanvasPainter extends CustomPainter {
   bool shouldRepaint(covariant CanvasPainter old) =>
       old.state != state || old.selectionId != selectionId || old.scale != scale || old.scaleY != scaleY ||
       old.hiddenTextId != hiddenTextId || old.progress != progress || old.march != march || old.epicycles != epicycles ||
-      old.bezier != bezier;
+      old.comet != comet || old.spring != spring;
 }
 
 /// The kinds of handle on a selected arrow or line.

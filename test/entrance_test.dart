@@ -7,10 +7,10 @@ import 'package:snaplite_flutter/editor/canvas_painter.dart';
 import 'package:snaplite_flutter/export/build_up_gif.dart';
 import 'package:snaplite_flutter/model/annotation.dart';
 
-/// The Bézier entrance for the build-up GIF: an arrow appears by its de Casteljau construction.
+/// Entrance effects for the build-up GIF: Comet (a glowing head leads the line) and Spring head (the tip
+/// overshoots and settles), beside the plain draw-on and Fourier circles.
 void main() {
-  final arrow = Annotation(id: 1, color: Colors.red, size: StrokeSize.large,
-      shape: const ArrowShape(Offset(40, 160), Offset(340, 60), points: [Offset(120, 40), Offset(240, 180)]));
+  final arrow = Annotation(id: 1, shape: ArrowShape(const Offset(40, 100), const Offset(300, 100)), color: Colors.red, size: StrokeSize.large);
 
   Future<Uint32List> paint(void Function(Canvas) draw) async {
     final rec = ui.PictureRecorder();
@@ -29,30 +29,44 @@ void main() {
     return n;
   }
 
-  int inked(Uint32List px) => px.where((p) => p != 0xFFFFFFFF).length;
+  /// The right-most column with ink (not white) in the picture.
+  int inkRight(Uint32List px) {
+    for (var x = 399; x >= 0; x--) {
+      for (var y = 0; y < 200; y++) {
+        if (px[y * 400 + x] != 0xFFFFFFFF) return x;
+      }
+    }
+    return -1;
+  }
 
-  test('Bézier: scaffolding shows while the curve builds, and is gone once it is complete', () async {
+  test('Comet: a glow leads the line while it draws on, and is gone once it is complete', () async {
     final plain = await paint((c) => CanvasPainter.drawPartial(c, arrow, 0.5));
-    final built = await paint((c) => CanvasPainter.drawPartial(c, arrow, 0.5, bezier: true));
-    expect(differing(plain, built), greaterThan(300), reason: 'the control polygon and sliding points are drawn');
-    final early = await paint((c) => CanvasPainter.drawPartial(c, arrow, 0.2, bezier: true));
-    final late = await paint((c) => CanvasPainter.drawPartial(c, arrow, 0.7, bezier: true));
-    expect(inked(late), greaterThan(inked(early)), reason: 'more of the curve is there later');
+    final comet = await paint((c) => CanvasPainter.drawPartial(c, arrow, 0.5, comet: true));
+    expect(differing(plain, comet), greaterThan(200), reason: 'the comet head and tail add ink around the tip');
     final done = await paint((c) => CanvasPainter.drawPartial(c, arrow, 1));
-    final doneBezier = await paint((c) => CanvasPainter.drawPartial(c, arrow, 1, bezier: true));
-    expect(differing(done, doneBezier), 0, reason: 'the finished arrow is the plain arrow, heads and all');
+    final doneComet = await paint((c) => CanvasPainter.drawPartial(c, arrow, 1, comet: true));
+    expect(differing(done, doneComet), 0, reason: 'nothing of the comet is left on the finished arrow');
   });
 
-  test('settings: the Entrance choice, the old Fourier flag, and the Bézier timing', () {
-    addTearDown(() => BuildUpGif.entrance = Entrance.draw);
-    BuildUpGif.entrance = Entrance.bezier;
+  test('Spring head: the tip overshoots past where it was drawn, then settles back exactly', () async {
+    final finished = await paint((c) => CanvasPainter.drawPartial(c, arrow, 1));
+    final overshoot = await paint((c) => CanvasPainter.drawPartial(c, arrow, 0.79, spring: true));
+    expect(inkRight(overshoot), greaterThan(inkRight(finished)), reason: 'at the start of the settle the tip is past its mark');
+    expect(CanvasPainter.sprung(arrow, 1), arrow.curve, reason: 'at rest it is the arrow as drawn');
+    final midway = await paint((c) => CanvasPainter.drawPartial(c, arrow, 0.4, spring: true));
+    expect(inkRight(midway), lessThan(inkRight(finished)), reason: 'still drawing on during the first three quarters');
+  });
+
+  test('settings: the Entrance choice, the old Fourier flag, and the sprung arrow timing', () {
+    addTearDown(() { BuildUpGif.entrance = Entrance.draw; BuildUpGif.spring = false; });
+    BuildUpGif.entrance = Entrance.comet;
     expect(BuildUpGif.fourier, isFalse);
-    expect(BuildUpGif.bezier, isTrue);
-    expect(BuildUpGif.appearing(arrow), BuildUpGif.bezierDraw, reason: 'slower, so the construction can be followed');
     BuildUpGif.fourier = true;
     expect(BuildUpGif.entrance, Entrance.fourier);
     BuildUpGif.fourier = false;
     expect(BuildUpGif.entrance, Entrance.draw, reason: 'turning Fourier off goes back to the plain draw-on');
     expect(BuildUpGif.appearing(arrow), BuildUpGif.lineDraw);
+    BuildUpGif.spring = true;
+    expect(BuildUpGif.appearing(arrow), BuildUpGif.springDraw, reason: 'a little longer so the settle shows');
   });
 }

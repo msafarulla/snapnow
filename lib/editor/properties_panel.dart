@@ -18,8 +18,10 @@ abstract class PanelHost {
   bool get selectionIsCurved;
   bool get followDrag; // new arrows and lines follow the dragged path
   void setFollowDrag(bool on);
-  Entrance get gifEntrance; // how strokes appear: draw on, by their Bézier construction, or traced by Fourier circles
+  Entrance get gifEntrance; // how strokes appear: draw on, led by a comet, or traced by Fourier circles
   void setGifEntrance(Entrance e);
+  bool get gifSpring; // arrows and lines overshoot at the tip and settle once drawn
+  void setGifSpring(bool on);
   int get gifMaxSide; // the build-up GIF's longest side in output pixels (S/M/L or custom)
   void setGifMaxSide(int px);
   bool get canPlayEntrance; // the selection can be watched appearing (a line, stroke or outline)
@@ -270,14 +272,20 @@ class PropertiesPanel extends StatelessWidget {
                 label: (e) => e.label, tooltip: (e) => e.tip, onTap: host.setGifEntrance, itemWidth: 54),
             ),
           ]),
-          if (host.canPlayEntrance)
-            Row(children: [
-              const Spacer(),
+          Row(children: [
+            Expanded(
+              child: Tooltip(
+                message: 'Arrows and lines overshoot at the tip and settle, like a tapped spring',
+                waitDuration: const Duration(milliseconds: 700),
+                child: _check(context, 'Spring head', host.gifSpring, host.setGifSpring),
+              ),
+            ),
+            if (host.canPlayEntrance)
               Tooltip(
-                message: 'Watch the selected stroke appear this way',
+                message: 'Watch the selected stroke appear',
                 child: _PillButton(icon: Icons.play_arrow, label: 'Play', onTap: host.playEntrance),
               ),
-            ]),
+          ]),
           _row(context, 'GIF size', [
             Expanded(
               child: Tooltip(

@@ -151,6 +151,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       e ??= (await Native.getBool('gifFourier')) == true ? Entrance.fourier : null; // the older on/off setting
       if (mounted && e != null) setState(() => BuildUpGif.entrance = e!);
     });
+    Native.getBool('gifSpring').then((on) { if (mounted && on != null) setState(() => BuildUpGif.spring = on); });
     Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });
     Native.getBool('pinOnTop').then((on) { if (on == true && !_pinTouched) _setPinned(true, save: false); });
     Native.getBool('inspector.hidden').then((hidden) { if (mounted && hidden == true) setState(() => _inspectorShown = false); });
@@ -277,7 +278,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   /// Marching Ants lines run while any annotation uses them (one dash cycle every 0.8 s).
   final _march = ValueNotifier<double>(0);
   Timer? _marchTimer;
-  /// Play: the annotation being watched appearing (drawn on, by its Bézier construction or traced by Fourier circles),
+  /// Play: the annotation being watched appearing (drawn on, led by a comet or traced by Fourier circles),
   /// and how far (0…1).
   int? _playId;
   double _playT = 1;
@@ -1030,7 +1031,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     setState(() { _selection = a.id; _group.clear(); });
   }
 
-  /// Shows `a` appearing as the GIF would (Play): drawn on, by its Bézier construction, or traced by Fourier circles
+  /// Shows `a` appearing as the GIF would (Play): drawn on, led by a comet, or traced by Fourier circles
   /// (while drawing with Fourier on, the circles follow live).
   void _playEntrance(Annotation a) {
     if (!_canPlay(a)) return;
@@ -1052,11 +1053,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     if (mounted) setState(() => _playId = null);
   }
 
-  static bool _canPlay(Annotation a) => switch (BuildUpGif.entrance) {
-        Entrance.fourier => Epicycles.of(a) != null,
-        Entrance.bezier => a.shape is ArrowShape || a.shape is LineShape,
-        Entrance.draw => a.shape is ArrowShape || a.shape is LineShape || a.shape is RectShape || a.shape is EllipseShape || a.shape is PenShape,
-      };
+  static bool _canPlay(Annotation a) => BuildUpGif.fourier
+      ? Epicycles.of(a) != null
+      : a.shape is ArrowShape || a.shape is LineShape || a.shape is RectShape || a.shape is EllipseShape || a.shape is PenShape;
 
   @override
   bool get canPlayEntrance => selected != null && _canPlay(selected!);
@@ -2554,7 +2553,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                           isComplex: true,
                           painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY,
                               hiddenTextId: _textEdit?.id, march: _march, epicycles: _playId != null && BuildUpGif.fourier,
-                              bezier: _playId != null && BuildUpGif.bezier,
+                              comet: _playId != null && BuildUpGif.entrance == Entrance.comet, spring: _playId != null && BuildUpGif.spring,
                               animate: state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches),
                               progress: _playId == null ? null : {for (final a in state.annotations) a.id: a.id == _playId ? _playT : 1.0}),
                         ))),
@@ -2563,7 +2562,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                       painter: _PreviewPainter(
                         base: CanvasPainter(state: state, selectionId: _playId == null ? _selection : null, scale: scale, scaleY: scaleY,
                             hiddenTextId: _textEdit?.id, march: _march, epicycles: _playId != null && BuildUpGif.fourier,
-                              bezier: _playId != null && BuildUpGif.bezier,
+                              comet: _playId != null && BuildUpGif.entrance == Entrance.comet, spring: _playId != null && BuildUpGif.spring,
                             progress: _playId == null ? null : {for (final a in state.annotations) a.id: a.id == _playId ? _playT : 1.0}),
                         origin: origin,
                         tool: _tool, color: _color, size: _size, scale: scale, scaleY: scaleY,
@@ -2812,7 +2811,14 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Native.setString('gifEntrance', e.name);
   }
 
+  @override
+  bool get gifSpring => BuildUpGif.spring;
 
+  @override
+  void setGifSpring(bool on) {
+    setState(() => BuildUpGif.spring = on);
+    Native.setBool('gifSpring', on);
+  }
 
   @override
   int get gifMaxSide => BuildUpGif.maxSide;

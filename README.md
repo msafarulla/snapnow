@@ -250,12 +250,11 @@ step-by-step in a chat or a ticket.
 
 **Entrance.** The style panel's **Entrance** choice (it shows when an arrow, line, pen, box or ellipse is
 selected or its tool is active) sets how lines, strokes and outlines appear in the GIF: **Draw** draws each one
-on from start to end; **Bézier** builds arrows and lines by their Bézier construction (de Casteljau): the
-control polygon of the curve appears in grey, then points slide along it with lines between them, two levels
-down to the single point that traces the curve, which is drawn underneath as it goes; the scaffolding fades as
-the curve completes and the arrowhead arrives with the finished arrow. **Fourier** traces strokes with
-spinning circles (below). Select a stroke and click **Play** to preview the chosen entrance on the canvas. The
-choice is remembered.
+on from start to end; **Comet** sends a glowing head with a short tail along it as it draws, fading out as the
+line completes; **Fourier** traces it with spinning circles (below). **Spring head** adds a flourish to arrows
+and lines with any entrance: once drawn, the tip overshoots a little, swings back and settles exactly where you
+put it, like a tapped spring. Select a stroke and click **Play** to preview the chosen entrance on the canvas.
+Both choices are remembered.
 
 **Fourier drawing.** Choose the **Fourier** entrance. From then on, while you draw a line, curve, pen stroke or outline, a
 chain of spinning circles follows it in real time, its tip on your pointer: the 3Blue1Brown epicycle effect,
