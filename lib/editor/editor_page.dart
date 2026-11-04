@@ -1270,6 +1270,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     for (final a in state.annotations) {
       if (a.id >= _nextId) _nextId = a.id + 1;
     }
+    _resetInteraction();
     setState(() {
       _undo.clear(); _redo.clear(); _selection = null;
       _state = state;
@@ -1286,6 +1287,20 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     await windowManager.setTitle('SnapNow — ${path.split('/').last}');
     if (fresh && mounted && ((await Native.getBool('capture.openInCrop')) ?? true) && mounted) _setTool(Tool.crop);
   }
+
+  /// Drops whatever was mid-way on the old picture (text being typed, a pending crop frame, a drag, a ⌘A
+  /// group) before another one takes the canvas, so none of it lands on the new picture.
+  void _resetInteraction() {
+    if (_textEdit != null) _endTextEdit(cancel: true);
+    _cropRect = null; _cropHandle = null; _cropGrab = null; _cropHover = null;
+    _createStart = null; _createCurrent = null; _penPoints = null; _trail = null;
+    _dragId = null; _resizeHandle = null; _imageMove = null; _guides = const []; _pendingBend = null;
+    _gestureSnapshot = null;
+    _group.clear();
+  }
+
+  @visibleForTesting
+  bool get debugInteracting => _textEdit != null || _cropRect != null || _group.isNotEmpty || _dragId != null;
 
   Future<void> openImageDialog() async {
     final result = await FilePicker.pickFiles(type: FileType.image);
