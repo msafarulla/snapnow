@@ -266,8 +266,8 @@ pressed and let go, and a straight drag stays perfectly straight. Animated GIFs 
 the same effect: traced strokes take a little longer to appear so the circles can be seen, while text, steps and
 highlights appear as before. The setting is remembered, and applies to ⇧⌘C, Save as Animated GIF and stickers.
 Without Fourier drawing, arrows and lines still follow your drag (**Curve: follow my drag**, on by default): a
-curved drag stays a curve, a round one becomes a true circular arc, and the ends never move from where you
-pressed and let go.
+curved drag becomes a smooth curve through a few bend points (the shape you drew, not the shake of your hand),
+a round one becomes a true circular arc, and the ends never move from where you pressed and let go.
 
 Because ⌘S keeps your markup inside the saved PNG, you can reopen any capture days later and make the GIF then.
 

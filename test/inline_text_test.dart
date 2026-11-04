@@ -583,9 +583,10 @@ void main() {
     await tester.pump();
     final arc = editor.selected!;
     final pts = arc.curve!;
-    expect(pts.length, greaterThan(2), reason: 'bends follow the drag');
-    expect(pts.length, lessThanOrEqualTo(12), reason: 'thinned to a few smooth bends');
-    final top = pts.map((p) => p.dy).reduce((a, b) => a < b ? a : b);
+    expect(pts.length, lessThanOrEqualTo(6), reason: 'a smooth fit with at most 4 bends');
+    expect(arc.curveTangents.every((t) => t != null), isTrue, reason: 'the fit sets every tangent');
+    final samples = CanvasPainter.curveSamples(pts, tangents: arc.curveTangents);
+    final top = samples.map((p) => p.dy).reduce((a, b) => a < b ? a : b);
     expect(pts.first.dy - top, greaterThan(100), reason: 'the curve rises with the drag (image coords)');
 
     // A straight drag stays straight even with Curve on

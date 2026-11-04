@@ -21,6 +21,7 @@ import '../model/annotation.dart';
 import '../model/markup_file.dart';
 import '../platform/native.dart';
 import 'canvas_painter.dart';
+import 'curve_fit.dart';
 import '../excalidraw/excalidraw_page.dart';
 import '../export/manim_scene.dart';
 import '../manim/from_capture.dart';
@@ -2689,28 +2690,13 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   /// The path a new arrow or line takes when it follows the drag (null when not following, or too short):
-  /// a true circular arc when the drag is close to one (anything curved one way), otherwise the drag smoothed
-  /// (each point averaged with its neighbours) and thinned to at most 6 bends.
+  /// a true circular arc when the drag is close to one (anything curved one way), otherwise a smooth
+  /// least-squares curve through the drag (smoothed first, each point averaged with its neighbours) with as
+  /// few bends as keep it within a few points of the drag, at most 4; hand wobble is fitted away.
   ({Offset from, Offset to, List<Offset> points, List<Offset?> tangents})? _follow(Offset start, Offset end) {
     final t = _trail;
     if (t == null || t.length < 3) return null;
-    final raw = [...t, end];
-    // Moving average over ±5 points; the ends stay where they are
-    const k = 5;
-    final pts = [
-      for (var i = 0; i < raw.length; i++)
-        if (i == 0 || i == raw.length - 1)
-          raw[i]
-        else
-          () {
-            final from = math.max(0, i - k), to = math.min(raw.length - 1, i + k);
-            var sum = Offset.zero;
-            for (var j = from; j <= to; j++) {
-              sum += raw[j];
-            }
-            return sum / (to - from + 1).toDouble();
-          }(),
-    ];
+    final pts = CurveFit.smoothed([...t, end]);
     // Nearly straight stays straight
     final chord = pts.last - pts.first, chordLen = chord.distance;
     var bulge = 0.0;
@@ -2721,15 +2707,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     if (bulge < math.max(3 / _viewScale, chordLen * 0.02)) return null;
     final arc = _arc(pts);
     if (arc != null) return arc;
-    // Fine enough that a curve you drew stays a curve (a bend of 2 screen points is kept), coarse enough to
-    // stay smooth: at most 12 points
-    var eps = 2 / _viewScale;
-    List<Offset> kept;
-    do {
-      kept = _simplify(pts, eps);
-      eps *= 1.3;
-    } while (kept.length > 12);
-    return (from: start, to: end, points: kept.sublist(1, kept.length - 1), tangents: const <Offset?>[]);
+    // Within 5 screen points (or 3% of the chord on a long drag) of the drag: a shape you drew stays, a
+    // shaky hand does not
+    final f = CurveFit.fit(pts, math.max(5 / _viewScale, chordLen * 0.03));
+    return (from: start, to: end, points: f.points.sublist(1, f.points.length - 1), tangents: f.tangents);
   }
 
   /// A circular arc through the drag, if it's close to one: a least-squares circle (Kåsa) that the points
@@ -2778,19 +2759,6 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         Offset(-math.sin(a0 + step * i), math.cos(a0 + step * i)) * (len * dir),
     ];
     return (from: a, to: b, points: on.sublist(1, on.length - 1), tangents: tg);
-  }
-
-  static List<Offset> _simplify(List<Offset> pts, double eps) {
-    if (pts.length < 3) return pts;
-    final a = pts.first, b = pts.last, ab = b - a, len = ab.distance;
-    var far = 0, best = 0.0;
-    for (var i = 1; i < pts.length - 1; i++) {
-      final ap = pts[i] - a;
-      final d = len == 0 ? ap.distance : (ab.dx * ap.dy - ab.dy * ap.dx).abs() / len;
-      if (d > best) { best = d; far = i; }
-    }
-    if (best <= eps) return [a, b];
-    return [..._simplify(pts.sublist(0, far + 1), eps)..removeLast(), ..._simplify(pts.sublist(far), eps)];
   }
 
   @override

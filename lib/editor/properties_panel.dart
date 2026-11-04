@@ -224,8 +224,7 @@ class PropertiesPanel extends StatelessWidget {
         if (isLine) {
           kids.addAll([
             _separator(context),
-            if (host.selected == null)
-              Tooltip(
+            Tooltip(
                 message: 'New arrows and lines follow the path you drag, as a smooth curve',
                 waitDuration: const Duration(milliseconds: 700),
                 child: _check(context, 'Curve: follow my drag', host.followDrag, host.setFollowDrag, indent: false),
