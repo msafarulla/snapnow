@@ -18,12 +18,14 @@ abstract class PanelHost {
   bool get selectionIsCurved;
   bool get followDrag; // new arrows and lines follow the dragged path
   void setFollowDrag(bool on);
-  bool get gifFourier; // Fourier circles draw new strokes in the editor and trace them in the build-up GIF
-  void setGifFourier(bool on);
+  Entrance get gifEntrance; // how strokes appear: draw on, led by a comet, or traced by Fourier circles
+  void setGifEntrance(Entrance e);
+  bool get gifSpring; // arrows and lines overshoot at the tip and settle once drawn
+  void setGifSpring(bool on);
   int get gifMaxSide; // the build-up GIF's longest side in output pixels (S/M/L or custom)
   void setGifMaxSide(int px);
-  bool get canPlayFourier; // the selection can be drawn by Fourier circles
-  void playFourier();
+  bool get canPlayEntrance; // the selection can be watched appearing (a line, stroke or outline)
+  void playEntrance();
   ShapeKind? get shapeKind; // a box or ellipse (selected, or the Shape tool's choice); null otherwise
   void pickShapeKind(ShapeKind k);
   StepMarker? get stepMarker; // a step's marker (selected, or the Step tool's choice); null otherwise
@@ -261,18 +263,27 @@ class PropertiesPanel extends StatelessWidget {
               child: _check(context, 'Marching', style.pattern.marches,
                   (v) => host.setArrowStyle(style.copyWith(pattern: style.pattern.marching(v)))),
             ),
+          _row(context, 'Entrance', [
+            Tooltip(
+              message: 'How lines, pen strokes and outlines appear in animated GIFs',
+              waitDuration: const Duration(milliseconds: 700),
+              child: _Segmented<Entrance>(
+                values: Entrance.values, selected: host.gifEntrance,
+                label: (e) => e.label, tooltip: (e) => e.tip, onTap: host.setGifEntrance, itemWidth: 54),
+            ),
+          ]),
           Row(children: [
             Expanded(
               child: Tooltip(
-                message: 'Spinning Fourier circles draw each new line, pen stroke and outline, here and in animated GIFs',
+                message: 'Arrows and lines overshoot at the tip and settle, like a tapped spring',
                 waitDuration: const Duration(milliseconds: 700),
-                child: _check(context, 'Fourier drawing', host.gifFourier, host.setGifFourier),
+                child: _check(context, 'Spring head', host.gifSpring, host.setGifSpring),
               ),
             ),
-            if (host.canPlayFourier)
+            if (host.canPlayEntrance)
               Tooltip(
-                message: 'Watch the circles draw the selected stroke',
-                child: _PillButton(icon: Icons.play_arrow, label: 'Play', onTap: host.playFourier),
+                message: 'Watch the selected stroke appear',
+                child: _PillButton(icon: Icons.play_arrow, label: 'Play', onTap: host.playEntrance),
               ),
           ]),
           _row(context, 'GIF size', [

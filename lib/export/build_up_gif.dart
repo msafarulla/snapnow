@@ -9,6 +9,16 @@ import '../model/annotation.dart';
 import 'epicycles.dart';
 import 'gif_encoder.dart';
 
+/// How lines, pen strokes and outlines appear in the build-up GIF (and in the editor's Play preview).
+enum Entrance {
+  draw('Draw', 'Each line draws itself on, start to end'),
+  comet('Comet', 'A glowing head with a short tail leads each line as it draws on'),
+  fourier('Fourier', 'Spinning Fourier circles draw each new line, pen stroke and outline, here and in animated GIFs');
+
+  const Entrance(this.label, this.tip);
+  final String label, tip;
+}
+
 /// The "build-up" GIF: the original capture, then each annotation appearing in the order it was added,
 /// then the finished picture, looping. Rendering uses the editor's own painter; encoding is pure Dart.
 class BuildUpGif {
@@ -20,6 +30,8 @@ class BuildUpGif {
   static const pauseAfterEach = Duration(milliseconds: 600);
   static const finalHold = Duration(milliseconds: 3000);
   static const lineDraw = Duration(milliseconds: 1200), fourierDraw = Duration(milliseconds: 2800);
+  /// A sprung arrow draws on, then its tip overshoots and settles: a little longer so the settle shows.
+  static const springDraw = Duration(milliseconds: 1500);
   /// The GIF's longest side in output pixels, user-chosen (editor GIF options / `gifMaxSide` pref): any
   /// value clamped to [minMaxSide]..[maxMaxSide]. Default 3840 keeps the old behaviour (full Retina
   /// sharpness, capped at a 4K side). The GIF never upscales past the capture's own pixels — see
@@ -30,8 +42,15 @@ class BuildUpGif {
   /// Clamp and set the chosen longest-side size (rejects out-of-range custom values).
   static void setMaxSide(int px) => maxSide = px.clamp(minMaxSide, maxMaxSide);
 
-  /// Fourier circles trace lines, pen strokes and outlines as they draw on (the editor's setting).
-  static bool fourier = false;
+  /// How lines, pen strokes and outlines appear (the editor's setting, pref `gifEntrance`).
+  static Entrance entrance = Entrance.draw;
+  /// Fourier circles trace lines, pen strokes and outlines as they draw on (= [entrance] is Fourier).
+  static bool get fourier => entrance == Entrance.fourier;
+  static set fourier(bool on) => entrance = on ? Entrance.fourier : (fourier ? Entrance.draw : entrance);
+  /// Arrows and lines overshoot at the tip and settle once drawn, like a tapped spring (pref `gifSpring`).
+  static bool spring = false;
+  /// Whether an appearance leaves transient marks (circles, a comet, an overshoot) that are gone at t = 1.
+  static bool get _transient => fourier || entrance == Entrance.comet || spring;
 
   /// The GIF's canvas is the whole original captured image. Optionally it can crop to the markup's bounding
   /// box plus a margin (the point of interest) — off by default: the original image stays the canvas.
@@ -40,6 +59,7 @@ class BuildUpGif {
   /// How long an annotation takes to appear: lines and outlines draw on a bit slower than pops and fades,
   /// and slower still while Fourier circles trace them, so the circles can be seen.
   static Duration appearing(Annotation a) => fourier && Epicycles.of(a) != null ? fourierDraw : switch (a.shape) {
+        ArrowShape() || LineShape() when spring => springDraw,
         ArrowShape() || LineShape() || RectShape() || EllipseShape() || PenShape() => lineDraw,
         HighlightShape() => const Duration(milliseconds: 900),
         _ => const Duration(milliseconds: 700),
@@ -92,11 +112,19 @@ class BuildUpGif {
     final bare = await _snapshot(s.copyWith(annotations: const []), null, zero, k, w, h);
     final withMarkup = await _snapshot(s, null, zero, k, w, h); // null progress = everything shown
     var r = _changedRect(bare, withMarkup, w, h); // output-pixel coordinates
-    // Fourier circles sweep widest mid-draw and are gone at t=1, so include a mid pass or they get clipped.
-    if (fourier && s.annotations.any((a) => Epicycles.of(a) != null)) {
-      final mid = {for (final a in s.annotations) a.id: 0.5};
-      final r2 = _changedRect(bare, await _snapshot(s, mid, zero, k, w, h), w, h);
-      r = r == null ? r2 : (r2 == null ? r : r.expandToInclude(r2));
+    // Fourier circles sweep widest mid-draw, a comet glows past the line and a sprung tip overshoots, all gone
+    // at t=1, so include passes part-way or they get clipped.
+    if (_transient) {
+      for (final t in const [0.5, 0.79]) { // mid-draw, and where a sprung tip reaches furthest
+        final part = {for (final a in s.annotations) a.id: t};
+        final r2 = _changedRect(bare, await _snapshot(s, part, zero, k, w, h), w, h);
+        r = r == null ? r2 : (r2 == null ? r : r.expandToInclude(r2));
+      }
+      // The comet's glow reaches a few line widths beyond the line wherever it is, so pad for it.
+      if (entrance == Entrance.comet && r != null) {
+        final glow = s.annotations.fold(0.0, (m, a) => math.max(m, a.lineWidth)) * 6.5 * k;
+        r = r.inflate(glow).intersect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()));
+      }
     }
     return r == null ? null : Rect.fromLTRB(r.left / k, r.top / k, r.right / k, r.bottom / k);
   }
@@ -183,7 +211,8 @@ class BuildUpGif {
       final canvas = Canvas(recorder)..translate(at.dx, at.dy);
       canvas.clipRect(Rect.fromLTWH(0, 0, w, h));
       canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = Colors.white);
-      CanvasPainter(state: s, selectionId: null, scale: k, progress: progress, march: march, epicycles: fourier)
+      CanvasPainter(state: s, selectionId: null, scale: k, progress: progress, march: march, epicycles: fourier,
+              comet: entrance == Entrance.comet, spring: spring)
           .paint(canvas, Size(w, h));
       final image = await recorder.endRecording().toImage(side, side);
       final rgba = (await image.toByteData(format: ui.ImageByteFormat.rawStraightRgba))!.buffer.asUint8List();
@@ -224,7 +253,8 @@ class BuildUpGif {
     final canvas = Canvas(recorder);
     // Crop to a focus box: shift it to the top-left corner, then only the w×h window is rasterized.
     if (origin != Offset.zero) canvas.translate(-origin.dx * k, -origin.dy * k);
-    CanvasPainter(state: s, selectionId: null, scale: k, progress: progress, march: march, epicycles: fourier)
+    CanvasPainter(state: s, selectionId: null, scale: k, progress: progress, march: march, epicycles: fourier,
+            comet: entrance == Entrance.comet, spring: spring)
         .paint(canvas, Size(w.toDouble(), h.toDouble()));
     final image = await recorder.endRecording().toImage(w, h);
     final data = await image.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
