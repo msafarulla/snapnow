@@ -560,7 +560,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   void _syncMarch(CanvasState state) {
-    final needed = _cropRect != null || state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches);
+    final needed = _cropRect != null || BuildUpGif.marches(state);
     if (needed && _marchTimer == null) {
       _marchTimer = Timer.periodic(const Duration(milliseconds: 40), (_) => _march.value = (_march.value + 0.05) % 1);
     } else if (!needed && _marchTimer != null) {

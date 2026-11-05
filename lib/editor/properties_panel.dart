@@ -301,6 +301,12 @@ class PropertiesPanel extends StatelessWidget {
               waitDuration: const Duration(milliseconds: 700),
               child: _check(context, 'Border', style.border, (v) => host.setArrowStyle(style.copyWith(border: v)), indent: false),
             ),
+            if (isLine)
+              Tooltip(
+                message: 'A light beam: a dark glass tube with comets running toward the head (they move in GIFs)',
+                waitDuration: const Duration(milliseconds: 700),
+                child: _check(context, 'Beam', style.beam, (v) => host.setArrowStyle(style.copyWith(beam: v)), indent: false),
+              ),
           ]),
           if (style.border || style.outline)
             _row(context, 'Outline\ncolor', [
