@@ -303,9 +303,9 @@ class PropertiesPanel extends StatelessWidget {
             ),
             if (isLine)
               Tooltip(
-                message: 'A light beam: a dark glass tube with comets running toward the head (they move in GIFs)',
+                message: 'Snake skin: a dark glass tube with glowing scales drifting toward the head (they move in GIFs)',
                 waitDuration: const Duration(milliseconds: 700),
-                child: _check(context, 'Beam', style.beam, (v) => host.setArrowStyle(style.copyWith(beam: v)), indent: false),
+                child: _check(context, 'Snake skin', style.snake, (v) => host.setArrowStyle(style.copyWith(snake: v)), indent: false),
               ),
           ]),
           if (style.border || style.outline)

@@ -115,8 +115,8 @@ class CanvasPainter extends CustomPainter {
     final w = a.lineWidth;
     switch (a.shape) {
       case ArrowShape() || LineShape():
-        if (a.arrowStyle.beam) {
-          drawBeam(canvas, a.curve!, a.arrowStyle, a.color, w, tangents: a.curveTangents);
+        if (a.arrowStyle.snake) {
+          drawSnake(canvas, a.curve!, a.arrowStyle, a.color, w, tangents: a.curveTangents);
         } else {
           drawArrow(canvas, a.curve!, a.arrowStyle, a.color, w, tangents: a.curveTangents);
         }
@@ -163,8 +163,8 @@ class CanvasPainter extends CustomPainter {
       case ArrowShape() || LineShape():
         final pts = partialCurve(a.curve!, a.curveTangents, along);
         if (pts != null) {
-          if (a.arrowStyle.beam) {
-            drawBeam(canvas, pts, a.arrowStyle, a.color, w);
+          if (a.arrowStyle.snake) {
+            drawSnake(canvas, pts, a.arrowStyle, a.color, w);
           } else {
             drawArrow(canvas, pts, a.arrowStyle, a.color, w);
           }
@@ -606,12 +606,12 @@ class CanvasPainter extends CustomPainter {
     ].reduce((a, b) => a.expandToInclude(b)).inflate(math.max(w, taperFull)));
   }
 
-  // ---- Beam ----
+  // ---- Snake skin ----
 
-  /// The Beam effect (an arrow as a light beam over a map): a dark translucent tube with a soft haze in the
-  /// line's colour, energy segments inside it, and bright comets running along it toward the end. `phase`
-  /// (0…1) moves the comets and segments; null uses the current march (the editor's ticker / the GIF loop).
-  static void drawBeam(Canvas canvas, List<Offset> pts, ArrowStyle style, Color color, double w,
+  /// The Snake skin effect (an arrow as a dark glass tube with glowing scales inside): a see-through black
+  /// band with a faint rim in the line's colour and a row of glowing pellets drifting toward the head. `phase`
+  /// (0…1) moves the pellets; null uses the current march (the editor's ticker / the GIF loop).
+  static void drawSnake(Canvas canvas, List<Offset> pts, ArrowStyle style, Color color, double w,
       {List<Offset?> tangents = const [], double? phase}) {
     final a = pts.first, b = pts.last;
     if (pts.length < 2 || ((b - a).distance <= 1 && pts.length == 2)) return;
@@ -625,10 +625,6 @@ class CanvasPainter extends CustomPainter {
     final start = _head(style.start, a, towardStart, w * 1.2, k);
     final body = [start.trim, ...pts.sublist(1, pts.length - 1), end.trim];
     final centerline = _curvePath(body, tangents);
-    final metrics = centerline.computeMetrics().toList();
-    if (metrics.isEmpty) return;
-    final metric = metrics.first;
-    final total = metric.length;
     final ph = (phase ?? _marchNow) % 1;
     final light = Color.lerp(color, Colors.white, 0.55)!;
 
@@ -641,34 +637,9 @@ class CanvasPainter extends CustomPainter {
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.25));
     canvas.drawPath(centerline, _stroke(Colors.black.withValues(alpha: 0.72), w * 2.3)
       ..maskFilter = MaskFilter.blur(BlurStyle.normal, w * 0.15));
-    // Haze around it
-    canvas.drawPath(centerline, glow(color.withValues(alpha: 0.16), w * 4, w * 1.5));
-    // Energy pellets inside the tube, drifting toward the end
+    // The scales: glowing pellets inside the tube, drifting toward the end (one scale per march cycle)
     final seg = [w * 0.9, w * 1.4];
     canvas.drawPath(dashed(centerline, seg, phase: (seg[0] + seg[1]) * (1 - ph)), glow(color.withValues(alpha: 0.55), w * 0.9, w * 0.3));
-
-    // Comets: streaks running toward the end; fade in at the start and out at the end
-    final tail = (w * 14).clamp(50.0, 200.0);
-    final n = (total / 360).round().clamp(2, 5); // at least two, so a march cycle (0.8 s) never carries a comet the whole way
-    for (var i = 0; i < n; i++) {
-      // One march cycle moves each comet to the next one's place, so the loop stays seamless at any count
-      final s = ((ph + i) / n % 1) * total;
-      final fade = math.min(1.0, math.min(s / tail, (total - s) / (tail * 0.4))).clamp(0.0, 1.0);
-      if (fade <= 0) continue;
-      const pieces = 6;
-      for (var p = 0; p < pieces; p++) {
-        final from = s - tail * (pieces - p) / pieces, to = s - tail * (pieces - p - 1) / pieces;
-        if (to <= 0) continue;
-        final f = (p + 1) / pieces; // toward the head
-        canvas.drawPath(metric.extractPath(math.max(from, 0), to),
-            glow(color.withValues(alpha: 0.7 * f * f * fade), w * (0.4 + 1.6 * f), w * (0.3 + 0.7 * f)));
-      }
-      // The head: a short white streak with a halo
-      final headLen = w * 3.5;
-      final streak = metric.extractPath(math.max(s - headLen, 0), s);
-      canvas.drawPath(streak, glow(color.withValues(alpha: 0.8 * fade), w * 2.6, w * 1.2));
-      canvas.drawPath(streak, glow(Colors.white.withValues(alpha: 0.95 * fade), w * 1.2, w * 0.35));
-    }
 
     // Heads: a flare in the colour behind, the head itself in a light tint
     for (final part in [start, end]) {

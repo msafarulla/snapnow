@@ -129,9 +129,9 @@ class BuildUpGif {
     return focus.inflate(m).intersect(Rect.fromLTWH(0, 0, imgW, imgH));
   }
 
-  /// Whether any annotation moves on its own: the Marching Ants patterns, or a Beam's comets.
+  /// Whether any annotation moves on its own: the Marching Ants patterns, or a Snake skin's scales.
   static bool marches(CanvasState s) =>
-      s.annotations.any((a) => a.styleKind != null && (a.arrowStyle.pattern.marches || a.arrowStyle.beam));
+      s.annotations.any((a) => a.styleKind != null && (a.arrowStyle.pattern.marches || a.arrowStyle.snake));
 
   /// The finished picture with only its Marching Ants moving: one dash cycle that loops seamlessly
   /// (what ⌘C copies when the markup has them).

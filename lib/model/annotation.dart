@@ -103,7 +103,7 @@ class ArrowStyle {
   final bool outline;
   final bool shadow;
   final bool border; // a thin edge in a darker shade of the line's own colour
-  final bool beam; // a light beam: dark glass tube, glowing pellets and comets running toward the head
+  final bool snake; // snake skin: a dark glass tube with glowing scales drifting toward the head
   final Color? borderColor; // the Border edge's colour, or the Outline's when Border is off; null = automatic
   final double? width; // exact line thickness in points (the thickness slider); null = from S / M / L
   const ArrowStyle({
@@ -115,7 +115,7 @@ class ArrowStyle {
     this.outline = false,
     this.shadow = true,
     this.border = false,
-    this.beam = false,
+    this.snake = false,
     this.borderColor,
     this.width,
   });
@@ -125,7 +125,7 @@ class ArrowStyle {
   static const shape = ArrowStyle(end: ArrowHead.none, shadow: false);
 
   ArrowStyle copyWith({ArrowHead? start, ArrowHead? end, HeadSize? headSize, LinePattern? pattern, bool? tapered,
-          bool? outline, bool? shadow, bool? border, bool? beam}) =>
+          bool? outline, bool? shadow, bool? border, bool? snake}) =>
       ArrowStyle(
         start: start ?? this.start,
         end: end ?? this.end,
@@ -135,22 +135,22 @@ class ArrowStyle {
         outline: outline ?? this.outline,
         shadow: shadow ?? this.shadow,
         border: border ?? this.border,
-        beam: beam ?? this.beam,
+        snake: snake ?? this.snake,
         borderColor: borderColor,
         width: width,
       );
 
   ArrowStyle withWidth(double? value) => ArrowStyle(start: start, end: end, headSize: headSize, pattern: pattern,
-      tapered: tapered, outline: outline, shadow: shadow, border: border, beam: beam, borderColor: borderColor, width: value);
+      tapered: tapered, outline: outline, shadow: shadow, border: border, snake: snake, borderColor: borderColor, width: value);
 
   ArrowStyle withBorderColor(Color? value) => ArrowStyle(start: start, end: end, headSize: headSize, pattern: pattern,
-      tapered: tapered, outline: outline, shadow: shadow, border: border, beam: beam, borderColor: value, width: width);
+      tapered: tapered, outline: outline, shadow: shadow, border: border, snake: snake, borderColor: value, width: width);
 
   Map<String, Object> toJson() => {
         'start': start.index, 'end': end.index, 'headSize': headSize.index, 'pattern': pattern.index,
         'tapered': tapered, 'outline': outline, 'shadow': shadow,
         if (border) 'border': true,
-        if (beam) 'beam': true,
+        if (snake) 'snake': true,
         if (borderColor != null) 'borderColor': borderColor!.toARGB32(),
         if (width != null) 'width': width!,
       };
@@ -167,7 +167,7 @@ class ArrowStyle {
       outline: json['outline'] == true,
       shadow: json['shadow'] != false,
       border: json['border'] == true,
-      beam: json['beam'] == true,
+      snake: json['snake'] == true,
       borderColor: json['borderColor'] is int ? Color(json['borderColor'] as int) : null,
       width: (json['width'] as num?)?.toDouble(),
     );
@@ -177,10 +177,10 @@ class ArrowStyle {
   bool operator ==(Object other) =>
       other is ArrowStyle && other.start == start && other.end == end && other.headSize == headSize &&
       other.pattern == pattern && other.tapered == tapered && other.outline == outline && other.shadow == shadow &&
-      other.border == border && other.beam == beam && other.borderColor == borderColor && other.width == width;
+      other.border == border && other.snake == snake && other.borderColor == borderColor && other.width == width;
 
   @override
-  int get hashCode => Object.hash(start, end, headSize, pattern, tapered, outline, shadow, border, beam, borderColor, width);
+  int get hashCode => Object.hash(start, end, headSize, pattern, tapered, outline, shadow, border, snake, borderColor, width);
 }
 
 /// How Text and Callout annotations set their words: font, exact size, bold/italic/underline, alignment,
