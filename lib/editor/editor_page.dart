@@ -2818,9 +2818,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     final b = _boxOf(a);
     final box = Rect.fromLTRB(origin.dx + b.left * scale, origin.dy + b.top * scale, origin.dx + b.right * scale,
         origin.dy + b.bottom * scale);
-    const w = _ThicknessCard.width, h = _ThicknessCard.height, gap = 14.0;
-    var left = box.right + gap;
+    const w = _ThicknessCard.width, gap = 14.0;
     final free = _freeRect(area);
+    // As tall as the window allows (up to the preferred height): a long track makes fine-tuning easy
+    final h = math.min(_ThicknessCard.height, math.max(_ThicknessCard.minHeight, free.height - 16));
+    var left = box.right + gap;
     if (left + w > free.right - 8) left = box.left - gap - w;
     left = left.clamp(free.left + 8, math.max(free.left + 8, free.right - w - 8));
     final top = (box.center.dy - h / 2).clamp(free.top + 8, math.max(free.top + 8, free.bottom - h - 8)).toDouble();
@@ -2828,6 +2830,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       left: left,
       top: top,
       child: _ThicknessCard(
+        cardHeight: h,
         value: (a.arrowStyle.width ?? a.size.line).clamp(1.0, 40.0),
         color: a.color,
         onStart: () => _thicknessSnapshot = _state,
@@ -3547,20 +3550,21 @@ class _RichTextController extends TextEditingController {
 /// The thickness slider shown beside a selected arrow, line or shape: a slim pill, drag up for thicker,
 /// down for thinner.
 class _ThicknessCard extends StatelessWidget {
-  static const width = 30.0, height = 156.0;
+  static const width = 30.0, height = 340.0, minHeight = 156.0; // height: preferred (≈8 pt of track per point)
   final double value; // points
   final Color color;
   final VoidCallback onStart, onEnd;
   final ValueChanged<double> onChanged;
-  const _ThicknessCard({required this.value, required this.color, required this.onStart, required this.onChanged,
-      required this.onEnd});
+  final double cardHeight;
+  const _ThicknessCard({this.cardHeight = height, required this.value, required this.color, required this.onStart,
+      required this.onChanged, required this.onEnd});
 
   @override
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
     return Container(
       width: width,
-      height: height,
+      height: cardHeight,
       padding: const EdgeInsets.only(top: 6, bottom: 4),
       decoration: SnapChrome.of(context).pill(),
       child: Column(children: [
