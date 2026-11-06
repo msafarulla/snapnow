@@ -92,6 +92,15 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func rebuild() {
         guard let window else { return }
+        // A rebuild while the window is open (a checkbox, a recorded key, a theme change) keeps the
+        // window's height and the distance scrolled from the top; otherwise the view jumped back to
+        // the top on every toggle ("checking or unchecking scrolls me back", 2026-11-06).
+        var keepHeight: CGFloat?
+        var keepFromTop: CGFloat?
+        if window.isVisible, let old = window.contentView?.subviews.first as? NSScrollView, let doc = old.documentView {
+            keepHeight = old.bounds.height
+            keepFromTop = doc.bounds.height - old.contentView.bounds.maxY
+        }
         Theme.style(window)
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
@@ -285,13 +294,15 @@ final class SettingsWindowController: NSWindowController {
         // "screen minus 48" cap the window still filled a 14" MacBook Pro ("settings window is
         // still so big", 2026-11-06).
         let screenHeight = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
-        let height = min(fit.height, (screenHeight * 0.7).rounded())
+        let height = keepHeight.map { min($0, fit.height) } ?? min(fit.height, (screenHeight * 0.7).rounded())
         window.contentMinSize = NSSize(width: fit.width, height: min(360, fit.height))
         window.contentMaxSize = NSSize(width: fit.width, height: fit.height)
         window.setContentSize(NSSize(width: fit.width, height: height))
-        // AppKit scrolls a non-flipped document to its bottom; start at the first section instead.
+        // AppKit scrolls a non-flipped document to its bottom; start at the first section (or where the
+        // user was) instead.
         scroll.layoutSubtreeIfNeeded()
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, fit.height - scroll.contentView.bounds.height)))
+        let fromTop = min(max(0, keepFromTop ?? 0), max(0, fit.height - scroll.contentView.bounds.height))
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, fit.height - scroll.contentView.bounds.height - fromTop)))
         scroll.reflectScrolledClipView(scroll.contentView)
     }
 
