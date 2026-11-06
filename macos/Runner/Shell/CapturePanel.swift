@@ -288,12 +288,13 @@ final class CapturePanelController: NSViewController, NSMenuDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Shortcuts.changed, object: nil)
     }
 
-    /// Scales the whole panel to the screen it opens on: 1.0 on a screen at least 1080 pt tall (16" and up),
-    /// down to 0.75 on small ones, so it is not oversized on a 14" MacBook Pro (2026-11-06: "the window that
+    /// Scales the whole panel to the screen it opens on: 0.8 on a screen at least 1080 pt tall (16" and up),
+    /// down to 0.6 on small ones, so it is not oversized on a 14" MacBook Pro (2026-11-06: "the window that
     /// pops up when you click on the menu icon is not at all scaled").
     func updateScale(for screen: NSScreen?) {
         let height = (screen ?? NSScreen.main)?.visibleFrame.height ?? 1080
-        (view as? ScaledHost)?.scale = min(1, max(0.75, (height / 1080 * 100).rounded() / 100))
+        // A further 20% smaller than the screen-height ratio (2026-11-06: "scale down maybe 20% more"): ~0.70 on a 14", 0.80 on a 16".
+        (view as? ScaledHost)?.scale = min(0.8, max(0.6, (height / 1080 * 0.8 * 100).rounded() / 100))
     }
 
     /// Re-reads the saved settings (the menu or Settings may have changed them) and redraws.
