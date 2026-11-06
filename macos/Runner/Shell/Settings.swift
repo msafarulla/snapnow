@@ -251,8 +251,11 @@ final class SettingsWindowController: NSWindowController {
         scroll.borderType = .noBorder
         scroll.documentView = content
         window.contentView = scroll
+        // Never taller than ~70% of the screen's visible height (the rest scrolls): at the old
+        // "screen minus 48" cap the window still filled a 14" MacBook Pro ("settings window is
+        // still so big", 2026-11-06).
         let screenHeight = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
-        let height = min(fit.height, screenHeight - 48)
+        let height = min(fit.height, (screenHeight * 0.7).rounded())
         window.contentMinSize = NSSize(width: fit.width, height: min(360, fit.height))
         window.contentMaxSize = NSSize(width: fit.width, height: fit.height)
         window.setContentSize(NSSize(width: fit.width, height: height))
