@@ -206,9 +206,15 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(separator())
         stack.addArrangedSubview(heading("Shortcuts"))
         stack.addArrangedSubview(note("Click a shortcut, then press the new keys (with ⌃, ⌥ or ⌘). Delete clears it, Esc cancels."))
-        let keys = NSGridView(numberOfColumns: 4, rows: 0)
-        keys.rowSpacing = 6
-        keys.columnSpacing = 12
+        // Plain rows, not an NSGridView: inside the scrolled Settings the grid drew only one of its
+        // columns at a time on the 14" (labels without buttons, then checkboxes without labels,
+        // "sometimes"), so each row is a horizontal stack with fixed column widths.
+        let labelWidth = ShortcutAction.allCases
+            .map { ($0.label as NSString).size(withAttributes: [.font: Theme.font(12)]).width }.max().map { ceil($0) + 4 } ?? 220
+        let keys = NSStackView()
+        keys.orientation = .vertical
+        keys.alignment = .leading
+        keys.spacing = 6
         for action in ShortcutAction.allCases {
             let enabled = Shortcuts.isEnabled(action)
             let onOff = NSButton(checkboxWithTitle: "", target: self, action: #selector(shortcutToggled(_:)))
@@ -218,6 +224,7 @@ final class SettingsWindowController: NSWindowController {
             let what = NSTextField(labelWithString: action.label)
             what.font = Theme.font(12)
             what.textColor = enabled ? Theme.dimText : Theme.muted
+            what.widthAnchor.constraint(equalToConstant: labelWidth).isActive = true
             let recorder = ShortcutRecorder()
             recorder.widthAnchor.constraint(equalToConstant: 110).isActive = true
             recorder.shortcut = Shortcuts.get(action)
@@ -226,9 +233,11 @@ final class SettingsWindowController: NSWindowController {
             let status = NSTextField(labelWithString: enabled ? (Shortcuts.failed.contains(action) ? "⚠︎ in use by another app" : "") : "off")
             status.font = Theme.font(11)
             status.textColor = enabled ? .systemOrange : Theme.muted
-            keys.addRow(with: [onOff, what, recorder, status])
+            let row = NSStackView(views: [onOff, what, recorder, status])
+            row.spacing = 12
+            row.alignment = .centerY
+            keys.addArrangedSubview(row)
         }
-        keys.column(at: 2).width = 120
         stack.addArrangedSubview(keys)
         let resetKeys = NSButton(title: "Reset Shortcuts", target: self, action: #selector(resetShortcuts))
         resetKeys.bezelStyle = .rounded
@@ -271,6 +280,7 @@ final class SettingsWindowController: NSWindowController {
             scroll.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor),
         ])
         window.contentView = backdrop
+        backdrop.layoutSubtreeIfNeeded()   // settle the layout before the first draw
         // Never taller than ~70% of the screen's visible height (the rest scrolls): at the old
         // "screen minus 48" cap the window still filled a 14" MacBook Pro ("settings window is
         // still so big", 2026-11-06).
