@@ -684,6 +684,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     }
 
     @objc func showSettings() {
+        popover.performClose(nil)   // the panel's transient popover otherwise keeps key focus
         SettingsWindowController.shared.show()
     }
 

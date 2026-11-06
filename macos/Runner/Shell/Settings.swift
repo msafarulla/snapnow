@@ -84,10 +84,17 @@ final class SettingsWindowController: NSWindowController {
 
     func show() {
         rebuild()
-        NSApp.activate()
-        if window?.isVisible != true { window?.center() }
+        guard let window else { return }
+        // Shown from the menu bar panel's gear menu with ⌘,: the app is not active yet and the window
+        // used to stay behind the front app (or on another Space when the user was in a full-screen
+        // app), so it took a second ⌘, to see it (2026-11-06). Activate first, join the active Space,
+        // and order the window front regardless of activation.
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        NSApp.activate(ignoringOtherApps: true)
+        if !window.isVisible { window.center() }
         showWindow(nil)
-        window?.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
     }
 
     @objc private func rebuild() {
