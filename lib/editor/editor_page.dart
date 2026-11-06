@@ -1326,28 +1326,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     return data?.buffer.asUint8List();
   }
 
-  /// Copies the flattened image; marching ants run around it instead of a toast (as in the Swift app).
-  /// Markup with Marching Ants lines copies as a looping GIF instead, so they keep moving where it's pasted.
+  /// ⌘C: always the flattened still image (PNG); marching ants run around it instead of a toast (as in
+  /// the Swift app). Until 1.70.6 markup with Marching Ants lines copied a looping GIF here instead -
+  /// per the user, ⌘C is always the static image and ⇧⌘C (copyAnimatedGif) is the GIF.
   Future<void> _copyImage() async {
     _endTextEdit();
     final s = _state;
     if (s == null) return;
-    if (BuildUpGif.marches(s)) {
-      try {
-        final dir = Directory('${Directory.systemTemp.path}/SnapNow GIFs')..createSync(recursive: true);
-        final path = '${dir.path}/${_gifName()}.gif';
-        await File(path).writeAsBytes(await BuildUpGif.renderMarching(s), flush: true);
-        await Native.copyGif(path);
-      } catch (e, st) {
-        debugPrint('GIF: $e\n$st');
-        await Native.toast("Couldn't make the GIF", symbol: 'exclamationmark.triangle.fill');
-        return;
-      }
-    } else {
-      final png = await _flatPng();
-      if (png == null) return;
-      await Pasteboard.writeImage(png);
-    }
+    final png = await _flatPng();
+    if (png == null) return;
+    await Pasteboard.writeImage(png);
     if (!mounted) return;
     setState(() => _selection = null);
     _showCopied();
@@ -1790,7 +1778,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     }
   }
 
-  /// ⇧⌘C: the build-up GIF on the clipboard (⌘C copies the still image). The file lives in a temp
+  /// ⇧⌘C: the build-up GIF on the clipboard (marching ants keep moving in it; ⌘C is always the still). The file lives in a temp
   /// folder, since apps like Messages and Slack paste the file to keep it animated.
   Future<void> copyAnimatedGif() async {
     final s = await _gifState();

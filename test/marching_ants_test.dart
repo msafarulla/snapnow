@@ -100,7 +100,7 @@ void main() {
     });
   });
 
-  testWidgets('⌘C copies a looping GIF when an arrow marches, a still PNG otherwise', (tester) async {
+  testWidgets('⌘C always copies the still PNG, even when an arrow marches; ⇧⌘C makes the GIF', (tester) async {
     final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final copiedGifs = <String>[];
     var pngCopies = 0;
@@ -111,8 +111,10 @@ void main() {
     });
     messenger.setMockMethodCallHandler(const MethodChannel('snaplite/native'), (call) async {
       if (call.method == 'copyGif') copiedGifs.add((call.arguments as Map)['path'] as String);
+      if (call.method == 'getString' && (call.arguments as Map)['key'] == 'gifFps') return '15'; // a quick render
       return null;
     });
+    addTearDown(() => BuildUpGif.fps = 50);
     tester.view.physicalSize = const Size(1600, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -129,11 +131,17 @@ void main() {
     });
     await tester.pump();
     final area = tester.getRect(find.byKey(const ValueKey('snaplite-canvas')));
-    Future<void> copy() => tester.runAsync(() async {
+    Future<void> copy({bool shift = false}) => tester.runAsync(() async {
+          if (shift) await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
           await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
           await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
           await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
-          await Future<void>.delayed(const Duration(seconds: 3)); // the GIF renders off the test clock
+          if (shift) await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+          // the GIF renders off the test clock: wait for it (up to 20 s), a still is quick
+          final gifs = copiedGifs.length;
+          for (var i = 0; i < 200 && (shift ? copiedGifs.length == gifs : i < 10); i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
         });
 
     await tester.tap(find.text('Arrow'));
@@ -148,9 +156,11 @@ void main() {
     await tester.dragFrom(area.topLeft + const Offset(300, 500), const Offset(250, -100));
     await tester.pump();
     await copy();
-    expect((pngCopies, copiedGifs.length), (1, 1), reason: 'marching ants copy as a GIF instead');
+    expect((pngCopies, copiedGifs.length), (2, 0), reason: '⌘C is always the still image (1.70.6), ants or not');
+    await copy(shift: true);
+    expect((pngCopies, copiedGifs.length), (2, 1), reason: '⇧⌘C is the GIF');
     final frames = await tester.runAsync(() async => (await ui.instantiateImageCodec(await File(copiedGifs.single).readAsBytes())).frameCount);
-    expect(frames, greaterThan(4));
+    expect(frames, greaterThan(4), reason: 'the ants keep marching in the GIF');
 
     await tester.pumpWidget(const SizedBox()); // closes the editor, which stops the ants' timer
   });
