@@ -397,6 +397,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             popover.performClose(nil)
         } else if let button = statusItem.button {
             panel.reload()
+            panel.updateScale(for: button.window?.screen)
             popover.appearance = Theme.appearance
             // Active first: over another app's full-screen Space the popover otherwise lands on the desktop Space
             // (or closes at once as the menu bar slides away) and nothing seems to happen.
