@@ -230,41 +230,36 @@ final class SettingsWindowController: NSWindowController {
         // The settings sit in a scroll view and the window is never taller than the screen it is
         // on: sized to the content's full height, the Shortcuts section at the bottom landed below the
         // 13" Air's screen edge with no way to reach it (2026-11-05). Resizable vertically; the
-        // width stays the content's own.
+        // width stays the content's own. The view hierarchy inside is unchanged from before (backdrop
+        // + stack, not flipped): a flipped document view made the shortcut buttons vanish.
         let content = Theme.makeBackdrop()
         stack.translatesAutoresizingMaskIntoConstraints = false
-        let doc = FlippedView()
-        doc.addSubview(stack)
+        content.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
+            stack.topAnchor.constraint(equalTo: content.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
-        let fit = stack.fittingSize
-        doc.frame = NSRect(origin: .zero, size: fit)
-        doc.autoresizingMask = [.width]
+        let fit = content.fittingSize
+        content.frame = NSRect(origin: .zero, size: fit)
+        content.autoresizingMask = [.width]
         let scroll = NSScrollView()
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
-        scroll.documentView = doc
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(scroll)
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: content.topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-        ])
-        window.contentView = content
+        scroll.documentView = content
+        window.contentView = scroll
         let screenHeight = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
         let height = min(fit.height, screenHeight - 48)
         window.contentMinSize = NSSize(width: fit.width, height: min(360, fit.height))
         window.contentMaxSize = NSSize(width: fit.width, height: fit.height)
         window.setContentSize(NSSize(width: fit.width, height: height))
-        scroll.contentView.scroll(to: .zero)
+        // AppKit scrolls a non-flipped document to its bottom; start at the first section instead.
+        scroll.layoutSubtreeIfNeeded()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, fit.height - scroll.contentView.bounds.height)))
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     private func heading(_ text: String) -> NSTextField {
@@ -498,10 +493,4 @@ enum Tool: Int, CaseIterable {
         ["Select", "Arrow", "Line", "Shape", "Ellipse", "Pen", "Highlight", "Text", "Callout", "Step", "Blur", "Spotlight", "Crop",
          "Copy Text"][rawValue]
     }
-}
-
-
-/// Top-down coordinates so a scrolled settings list starts at its first section, not its last.
-private final class FlippedView: NSView {
-    override var isFlipped: Bool { true }
 }
