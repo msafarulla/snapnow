@@ -76,6 +76,7 @@ final class SettingsWindowController: NSWindowController {
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 24, bottom: 24, right: 24)
         NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Theme.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Shortcuts.changed, object: nil)   // on/off + "in use" status
         rebuild()
     }
 
@@ -205,23 +206,29 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(separator())
         stack.addArrangedSubview(heading("Shortcuts"))
         stack.addArrangedSubview(note("Click a shortcut, then press the new keys (with ⌃, ⌥ or ⌘). Delete clears it, Esc cancels."))
-        let keys = NSGridView(numberOfColumns: 3, rows: 0)
+        let keys = NSGridView(numberOfColumns: 4, rows: 0)
         keys.rowSpacing = 6
         keys.columnSpacing = 12
         for action in ShortcutAction.allCases {
+            let enabled = Shortcuts.isEnabled(action)
+            let onOff = NSButton(checkboxWithTitle: "", target: self, action: #selector(shortcutToggled(_:)))
+            onOff.state = enabled ? .on : .off
+            onOff.tag = ShortcutAction.allCases.firstIndex(of: action)!
+            onOff.toolTip = "Off: this key is not taken by SnapNow"
             let what = NSTextField(labelWithString: action.label)
             what.font = Theme.font(12)
-            what.textColor = Theme.dimText
+            what.textColor = enabled ? Theme.dimText : Theme.muted
             let recorder = ShortcutRecorder()
             recorder.widthAnchor.constraint(equalToConstant: 110).isActive = true
             recorder.shortcut = Shortcuts.get(action)
+            recorder.isEnabled = enabled
             recorder.onChange = { [weak self] new in self?.shortcutChanged(new, for: action) }
-            let status = NSTextField(labelWithString: Shortcuts.failed.contains(action) ? "⚠︎ in use by another app" : "")
+            let status = NSTextField(labelWithString: enabled ? (Shortcuts.failed.contains(action) ? "⚠︎ in use by another app" : "") : "off")
             status.font = Theme.font(11)
-            status.textColor = .systemOrange
-            keys.addRow(with: [what, recorder, status])
+            status.textColor = enabled ? .systemOrange : Theme.muted
+            keys.addRow(with: [onOff, what, recorder, status])
         }
-        keys.column(at: 1).width = 120
+        keys.column(at: 2).width = 120
         stack.addArrangedSubview(keys)
         let resetKeys = NSButton(title: "Reset Shortcuts", target: self, action: #selector(resetShortcuts))
         resetKeys.bezelStyle = .rounded
@@ -232,7 +239,11 @@ final class SettingsWindowController: NSWindowController {
         // 13" Air's screen edge with no way to reach it (2026-11-05). Resizable vertically; the
         // width stays the content's own. The view hierarchy inside is unchanged from before (backdrop
         // + stack, not flipped): a flipped document view made the shortcut buttons vanish.
-        let content = Theme.makeBackdrop()
+        // The blur backdrop is the window's content view and the scroll view sits on top of it; the
+        // scrolled document is a plain view. With the backdrop (an NSVisualEffectView) as the document,
+        // AppKit stopped drawing the bezelled recorder buttons as soon as the document was taller than
+        // the window - fine on a 15" Air (no scrolling), blank buttons on a 14" MacBook Pro (2026-11-06).
+        let content = NSView()
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -250,7 +261,16 @@ final class SettingsWindowController: NSWindowController {
         scroll.autohidesScrollers = true
         scroll.borderType = .noBorder
         scroll.documentView = content
-        window.contentView = scroll
+        let backdrop = Theme.makeBackdrop()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: backdrop.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor),
+        ])
+        window.contentView = backdrop
         // Never taller than ~70% of the screen's visible height (the rest scrolls): at the old
         // "screen minus 48" cap the window still filled a 14" MacBook Pro ("settings window is
         // still so big", 2026-11-06).
@@ -385,6 +405,11 @@ final class SettingsWindowController: NSWindowController {
     }
 
     /// Rejects reserved and duplicate combinations; otherwise saves, which re-registers the hotkeys.
+    @objc private func shortcutToggled(_ sender: NSButton) {
+        let action = ShortcutAction.allCases[sender.tag]
+        Shortcuts.setEnabled(sender.state == .on, for: action)   // posts Shortcuts.changed -> re-registers + rebuild
+    }
+
     private func shortcutChanged(_ shortcut: Shortcut?, for action: ShortcutAction) {
         if let shortcut {
             if shortcut.isReserved {

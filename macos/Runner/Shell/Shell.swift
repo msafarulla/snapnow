@@ -304,6 +304,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     /// Whether `action`'s global shortcut should be live under the current hotkey mode.
     private func hotkeyEnabled(_ action: ShortcutAction) -> Bool {
+        guard Shortcuts.isEnabled(action) else { return false }   // switched off in Settings
         switch hotkeyMode {
         case .all: return true
         case .regionOnly: return action == .region

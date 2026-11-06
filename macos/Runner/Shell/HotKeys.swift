@@ -130,7 +130,22 @@ enum Shortcuts {
     }
 
     static func resetAll() {
-        ShortcutAction.allCases.forEach { UserDefaults.standard.removeObject(forKey: key($0)) }
+        ShortcutAction.allCases.forEach {
+            UserDefaults.standard.removeObject(forKey: key($0))
+            UserDefaults.standard.removeObject(forKey: key($0) + ".enabled")
+        }
+        NotificationCenter.default.post(name: changed, object: nil)
+    }
+
+    /// Per-shortcut on/off (Settings checkbox; default on): off means the key is not registered at all,
+    /// so another app can have it (per direct request, 2026-11-06: "no option to disable the ones where
+    /// I dont want to shortkey").
+    static func isEnabled(_ action: ShortcutAction) -> Bool {
+        UserDefaults.standard.object(forKey: key(action) + ".enabled") as? Bool ?? true
+    }
+
+    static func setEnabled(_ on: Bool, for action: ShortcutAction) {
+        UserDefaults.standard.set(on, forKey: key(action) + ".enabled")
         NotificationCenter.default.post(name: changed, object: nil)
     }
 
