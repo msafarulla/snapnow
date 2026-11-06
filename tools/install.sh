@@ -11,6 +11,25 @@
 # Second Mac: set SNAPLITE_PUSH_HOST=user@host (or put it in ~/.config/snaplite/push-host) to also
 # copy the signed app there over SSH.
 set -euo pipefail
+
+# Signing needs the login keychain (it holds the signing keychain's password), and macOS opens
+# that only in the user's desktop (Aqua) session. From a background session - a Herdr pane, SSH,
+# Claude - hand the whole run to the desktop session through Hammerspoon and wait for it
+# (2026-11-06: "User interaction is not allowed" / "passphrase not correct" from a Herdr pane).
+hs=/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs
+if [[ ${SNAPLITE_VIA_HS:-0} != 1 && $(launchctl managername 2>/dev/null) != Aqua && -x $hs ]] && pgrep -qx Hammerspoon; then
+  log=/tmp/snapnow-install.$$.log; rm -f "$log"
+  args=""; for a in "$@"; do args+=" $(printf %q "$a")"; done
+  cmd="export SNAPLITE_VIA_HS=1; cd $(printf %q "$PWD") && tools/install.sh$args > $log 2>&1; echo EXIT=\$? >> $log"
+  echo "background session: running the install in the desktop session via Hammerspoon (log: $log)"
+  "$hs" -t 10 -c "hs.task.new('/bin/zsh', nil, {'-lc', [[$cmd]]}):start()" >/dev/null 2>&1 &
+  hspid=$!; ( sleep 15; kill $hspid 2>/dev/null ) & wait $hspid 2>/dev/null || true
+  for i in {1..600}; do [[ -e $log ]] && grep -q '^EXIT=' "$log" && break; sleep 1; done
+  [[ -e $log ]] || { echo "Hammerspoon did not start the install (is the Pro signed in?)" >&2; exit 1; }
+  grep -v 'warning:' "$log" | grep -v '^EXIT='
+  rc=$(sed -n 's/^EXIT=//p' "$log" | tail -1); rm -f "$log"
+  exit "${rc:-1}"
+fi
 cd "${0:A:h}/.."
 export PATH=/opt/homebrew/bin:$HOME/.gem/bin:$PATH
 [[ -d $HOME/.gem ]] && export GEM_HOME=$HOME/.gem   # CocoaPods installed as a user gem
@@ -56,19 +75,9 @@ keychain=~/Library/Keychains/snaplite-signing.keychain-db
 if [[ -n $identity ]]; then
   keychain_args=()
   if [[ -e $keychain ]]; then
-    # Already unlocked (tools/keep-signing-unlocked.sh sets it to never auto-lock, so this is the
-    # normal case, screen locked or not): nothing to do. Otherwise its password lives in the login
-    # keychain - read here, never stored - which macOS only hands out while the user is signed in
-    # at this Mac; say so instead of a cryptic "passphrase not correct".
-    if ! security show-keychain-info "$keychain" >/dev/null 2>&1; then
-      pw=$(security find-generic-password -a "$USER" -s snaplite-signing-keychain -w 2>/dev/null || true)
-      if [[ -z $pw ]] || ! security unlock-keychain -p "$pw" "$keychain"; then
-        echo "signing keychain is locked and the login keychain won't give its password (not signed in at this Mac?)." >&2
-        echo "Sign in at the Pro and run tools/keep-signing-unlocked.sh once; then this works from anywhere." >&2
-        exit 1
-      fi
-      unset pw
-    fi
+    # The keychain's password lives in the login keychain; it is read here and never stored
+    # (login keychain open = desktop session; see the Hammerspoon hand-off at the top)
+    security unlock-keychain -p "$(security find-generic-password -a "$USER" -s snaplite-signing-keychain -w)" "$keychain"
     keychain_args=(--keychain "$keychain")
   fi
   codesign --force --deep "${keychain_args[@]}" --sign "$identity" "$app"
