@@ -26,6 +26,16 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private var recordingTimer: Timer?
     private var countdownTimer: Timer?
     private var shortcutItems: [ShortcutAction: NSMenuItem] = [:]
+    /// Which global shortcuts are live: all of them, only Capture Region, or none (per direct request,
+    /// 2026-11-06: "the hot keys should be able to be disabled, sometimes other [than] option T you dont
+    /// want any other hot keys to work"). Persisted as hotkeys.mode.
+    enum HotkeyMode: String { case all, regionOnly, none }
+    private var hotkeyMode: HotkeyMode {
+        get { HotkeyMode(rawValue: defaults.string(forKey: "hotkeys.mode") ?? "") ?? .all }
+        set { defaults.set(newValue.rawValue, forKey: "hotkeys.mode") }
+    }
+    private let hotkeysItem = NSMenuItem(title: "Hotkeys", action: nil, keyEquivalent: "")
+    private var hotkeyModeItems: [HotkeyMode: NSMenuItem] = [:]
     private let shortcutWarning = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var busy = false   // a capture, countdown or region pick is in progress
 
@@ -113,6 +123,15 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             after.submenu?.addItem(entry)
         }
         menu.addItem(after)
+        hotkeysItem.submenu = NSMenu()
+        for (mode, title) in [(HotkeyMode.all, "All Shortcuts"), (.regionOnly, "Only Capture Region"), (.none, "None (Paused)")] {
+            let entry = NSMenuItem(title: title, action: #selector(setHotkeyMode(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = mode.rawValue
+            hotkeyModeItems[mode] = entry
+            hotkeysItem.submenu?.addItem(entry)
+        }
+        menu.addItem(hotkeysItem)
         for entry in [microphoneItem, loginItem] {
             entry.target = self
             menu.addItem(entry)
@@ -195,6 +214,14 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     /// Shows each item's current shortcut, and a warning line for ones another app owns.
     private func updateShortcutItems() {
+        let region = Shortcuts.get(.region)?.display ?? "Capture Region"
+        hotkeyModeItems[.regionOnly]?.title = "Only Capture Region (\(region))"
+        for (mode, entry) in hotkeyModeItems { entry.state = mode == hotkeyMode ? .on : .off }
+        switch hotkeyMode {
+        case .all: hotkeysItem.title = "Hotkeys"
+        case .regionOnly: hotkeysItem.title = "Hotkeys: Only \(region)"
+        case .none: hotkeysItem.title = "Hotkeys: Paused"
+        }
         for (action, item) in shortcutItems {
             let (key, mask) = Shortcuts.get(action)?.menuKey ?? ("", [])
             item.keyEquivalent = key
@@ -264,12 +291,32 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     // MARK: - Hotkeys
 
-    /// Registers the shortcuts from Settings; runs again whenever they change.
+    @objc private func setHotkeyMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let mode = HotkeyMode(rawValue: raw) else { return }
+        hotkeyMode = mode
+        registerHotKeys()
+        switch mode {
+        case .all: Toast.show("All shortcuts on")
+        case .regionOnly: Toast.show("Only \(Shortcuts.get(.region)?.display ?? "Capture Region") is on")
+        case .none: Toast.show("Shortcuts paused")
+        }
+    }
+
+    /// Whether `action`'s global shortcut should be live under the current hotkey mode.
+    private func hotkeyEnabled(_ action: ShortcutAction) -> Bool {
+        switch hotkeyMode {
+        case .all: return true
+        case .regionOnly: return action == .region
+        case .none: return false
+        }
+    }
+
+    /// Registers the shortcuts from Settings (those the hotkey mode allows); runs again whenever they change.
     @objc private func registerHotKeys() {
         HotKeyCenter.shared.unregisterAll()
         Shortcuts.failed.removeAll()
         for action in ShortcutAction.allCases {
-            guard let shortcut = Shortcuts.get(action) else { continue }
+            guard hotkeyEnabled(action), let shortcut = Shortcuts.get(action) else { continue }
             let ok = HotKeyCenter.shared.register(shortcut) { [weak self] in self?.perform(action) }
             if !ok {
                 Shortcuts.failed.append(action)

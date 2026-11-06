@@ -95,6 +95,12 @@ class Native {
 
   static Future<String> ocr(String path) async => await _call<String>('ocr', {'path': path}) ?? '';
   static Future<int> displayUnderMouse() async => await _call<int>('displayUnderMouse') ?? 1;
+  /// Visible size (points) of the display under the mouse; null off macOS or on failure.
+  static Future<Size?> screenVisibleSize() async {
+    final r = await _call<List<dynamic>>('screenVisibleSize');
+    if (r == null || r.length < 2) return null;
+    return Size((r[0] as num).toDouble(), (r[1] as num).toDouble());
+  }
 
   static Future<void> reveal(String path) => _call('reveal', {'path': path});
   static Future<void> openUrl(String url) => _call('openUrl', {'url': url});

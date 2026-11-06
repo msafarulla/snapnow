@@ -85,7 +85,7 @@ class AppController with TrayListener, WindowListener {
     if (!_sized) {
       _sized = true;
       await windowManager.setMinimumSize(const Size(720, 480));
-      await windowManager.setSize(const Size(1240, 860));
+      await windowManager.setSize(initialWindowSize(await Native.screenVisibleSize()));
       await windowManager.center();
     }
     await windowManager.show();
@@ -176,4 +176,15 @@ class AppController with TrayListener, WindowListener {
     if (menuItem.key == 'quit') exit(0);
     perform(menuItem.key ?? '');
   }
+}
+
+/// The editor/library window's first size: 1240×860 points at most, but never more than 74% of the
+/// screen's visible width or 78% of its height, so it fits a 14" MacBook Pro (1512×982) as comfortably
+/// as a 16" one, and never below the window's minimum.
+Size initialWindowSize(Size? visible) {
+  const max = Size(1240, 860), min = Size(720, 480);
+  if (visible == null || visible.width <= 0 || visible.height <= 0) return max;
+  final w = (visible.width * 0.74).clamp(min.width, max.width);
+  final h = (visible.height * 0.78).clamp(min.height, max.height);
+  return Size(w.roundToDouble(), h.roundToDouble());
 }

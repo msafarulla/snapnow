@@ -223,6 +223,12 @@ final class SnapLiteNative {
       // screencapture -D numbers displays from 1 in NSScreen.screens order
       let mouse = NSEvent.mouseLocation
       result((NSScreen.screens.firstIndex { NSMouseInRect(mouse, $0.frame, false) } ?? 0) + 1)
+    case "screenVisibleSize":
+      // Visible frame (points, below the menu bar and above the Dock) of the display under the mouse,
+      // so the editor/library window can be sized to the screen it opens on (14" vs 16" Macs).
+      let mouse = NSEvent.mouseLocation
+      let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+      result([Double(screen.visibleFrame.width), Double(screen.visibleFrame.height)])
     case "beep":
       NSSound.beep()
       result(nil)
