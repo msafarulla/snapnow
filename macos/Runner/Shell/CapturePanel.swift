@@ -222,11 +222,19 @@ final class CapturePanelController: NSViewController, NSMenuDelegate {
     private let hint = NSTextField(labelWithString: "")
     private let presetsMenu = NSMenu()
     private let shutter = ShutterButton()
+    /// Compact layout for small screens (a 14" MacBook Pro): real smaller fonts, chips and gaps, not a
+    /// scaled view (a transform-scaled panel "looks so ugly and so out of place", 2026-11-06).
+    private(set) var compact = false
+    private var widthConstraint: NSLayoutConstraint?
+    private var gaps: [(NSLayoutConstraint, CGFloat, CGFloat)] = []   // (constraint, regular, compact)
+    private var presets: ThemedButton?
 
     override func loadView() {
         let root = FillView(.surface)   // clear in Glass: the popover's own frosted material shows
         root.translatesAutoresizingMaskIntoConstraints = false
-        root.widthAnchor.constraint(equalToConstant: 428).isActive = true
+        let width = root.widthAnchor.constraint(equalToConstant: 428)
+        width.isActive = true
+        widthConstraint = width
 
         modes.spacing = 4
         options.orientation = .vertical
@@ -242,6 +250,7 @@ final class CapturePanelController: NSViewController, NSMenuDelegate {
 
         let presets = ThemedButton(symbol: "slider.horizontal.3", label: "Presets", target: self, action: #selector(showPresets(_:)))
         presets.fontSize = 12
+        self.presets = presets
         presetsMenu.delegate = self
         let library = ThemedButton(symbol: "photo.on.rectangle.angled", target: self, action: #selector(openLibrary))
         library.toolTip = "Library"
@@ -258,19 +267,22 @@ final class CapturePanelController: NSViewController, NSMenuDelegate {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
+        gaps = [
+            (modes.topAnchor.constraint(equalTo: root.topAnchor, constant: 14), 14, 10),
+            (shutter.topAnchor.constraint(equalTo: modes.bottomAnchor, constant: 16), 16, 10),
+            (shortcutLabel.topAnchor.constraint(equalTo: shutter.bottomAnchor, constant: 4), 4, 2),
+            (options.topAnchor.constraint(equalTo: shortcutLabel.bottomAnchor, constant: 14), 14, 10),
+            (hint.topAnchor.constraint(equalTo: options.bottomAnchor, constant: 8), 8, 6),
+            (footerLine.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 10), 10, 8),
+        ]
+        NSLayoutConstraint.activate(gaps.map { $0.0 })
         NSLayoutConstraint.activate([
-            modes.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
             modes.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            shutter.topAnchor.constraint(equalTo: modes.bottomAnchor, constant: 16),
             shutter.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            shortcutLabel.topAnchor.constraint(equalTo: shutter.bottomAnchor, constant: 4),
             shortcutLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            options.topAnchor.constraint(equalTo: shortcutLabel.bottomAnchor, constant: 14),
             options.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            hint.topAnchor.constraint(equalTo: options.bottomAnchor, constant: 8),
             hint.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             hint.widthAnchor.constraint(lessThanOrEqualToConstant: 360),
-            footerLine.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: 10),
             footerLine.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             footerLine.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
             footerLine.heightAnchor.constraint(equalToConstant: 1),
@@ -283,6 +295,22 @@ final class CapturePanelController: NSViewController, NSMenuDelegate {
         rebuild()
         NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Theme.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Shortcuts.changed, object: nil)
+    }
+
+    /// Picks the compact layout on a screen under 1000 pt of visible height (the 14" MacBook Pro has ~945;
+    /// the 16" and the 15" Air have over 1050) and relays out when that changes.
+    func updateCompact(for screen: NSScreen?) {
+        let height = (screen ?? NSScreen.main)?.visibleFrame.height ?? 1080
+        let wanted = height < 1000
+        guard isViewLoaded, wanted != compact else { return }
+        compact = wanted
+        widthConstraint?.constant = compact ? 364 : 428
+        for (constraint, regular, small) in gaps { constraint.constant = compact ? small : regular }
+        shutter.diameter = compact ? 60 : 76
+        shortcutLabel.font = .systemFont(ofSize: compact ? 10 : 11)
+        hint.font = Theme.font(compact ? 10 : 11)
+        presets?.fontSize = compact ? 11 : 12
+        rebuild()
     }
 
     /// Re-reads the saved settings (the menu or Settings may have changed them) and redraws.
@@ -362,10 +390,11 @@ final class CapturePanelController: NSViewController, NSMenuDelegate {
         chip.chip = true
         chip.chipFilled = filled
         chip.isActive = on
-        chip.fontSize = 12
-        chip.iconBox = NSSize(width: 14, height: 14)
-        let width = (title as NSString).size(withAttributes: [.font: Theme.font(12)]).width + 40
-        chip.fixedSize = NSSize(width: ceil(width), height: 28)
+        let size: CGFloat = compact ? 11 : 12
+        chip.fontSize = size
+        chip.iconBox = compact ? NSSize(width: 12, height: 12) : NSSize(width: 14, height: 14)
+        let width = (title as NSString).size(withAttributes: [.font: Theme.font(size)]).width + (compact ? 32 : 40)
+        chip.fixedSize = NSSize(width: ceil(width), height: compact ? 24 : 28)
         return chip
     }
 
@@ -586,13 +615,18 @@ final class ShutterButton: NSButton {
     }
     private var hovering = false
 
+    private var sizeConstraints: [NSLayoutConstraint] = []
+    var diameter: CGFloat = 76 {
+        didSet { sizeConstraints.forEach { $0.constant = diameter }; needsDisplay = true }
+    }
+
     init() {
         super.init(frame: .zero)
         isBordered = false
         title = ""
         setButtonType(.momentaryChange)
-        widthAnchor.constraint(equalToConstant: 76).isActive = true
-        heightAnchor.constraint(equalToConstant: 76).isActive = true
+        sizeConstraints = [widthAnchor.constraint(equalToConstant: diameter), heightAnchor.constraint(equalToConstant: diameter)]
+        NSLayoutConstraint.activate(sizeConstraints)
         toolTip = "Capture"
     }
 
