@@ -279,21 +279,10 @@ final class CapturePanelController: NSViewController, NSMenuDelegate {
             footer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
-        let host = ScaledHost(inner: root)
-        host.onSize = { [weak self] size in self?.preferredContentSize = size }
-        view = host
-        updateScale(for: nil)
+        view = root
         rebuild()
         NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Theme.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Shortcuts.changed, object: nil)
-    }
-
-    /// Scales the whole panel to the screen it opens on: 1.0 on a screen at least 1080 pt tall (16" and up),
-    /// down to 0.75 on small ones, so it is not oversized on a 14" MacBook Pro (2026-11-06: "the window that
-    /// pops up when you click on the menu icon is not at all scaled").
-    func updateScale(for screen: NSScreen?) {
-        let height = (screen ?? NSScreen.main)?.visibleFrame.height ?? 1080
-        (view as? ScaledHost)?.scale = min(1, max(0.75, (height / 1080 * 100).rounded() / 100))
     }
 
     /// Re-reads the saved settings (the menu or Settings may have changed them) and redraws.
@@ -311,7 +300,6 @@ final class CapturePanelController: NSViewController, NSMenuDelegate {
 
     @objc private func rebuild() {
         guard isViewLoaded else { return }
-        defer { (view as? ScaledHost)?.refresh() }   // the content height changes with the mode
         modes.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for mode in PanelMode.allCases {
             let chip = makeChip(mode.label, symbol: mode.symbol, on: config.mode == mode, filled: true, action: #selector(modeClicked(_:)))
@@ -646,48 +634,5 @@ final class ShutterButton: NSButton {
         (hovering ? center.blended(withFraction: 0.12, of: .white)! : center).setFill()
         disk.fill()
         NSGraphicsContext.restoreGraphicsState()
-    }
-}
-
-/// Hosts the panel's natural-size layout and shows it scaled by `scale`: the host's bounds keep the natural
-/// size while its frame is `scale` times that, so AppKit scales drawing and hit-testing together.
-final class ScaledHost: NSView {
-    private let inner: NSView
-    var scale: CGFloat = 1 { didSet { if scale != oldValue { refresh() } } }
-    var onSize: ((NSSize) -> Void)?
-
-    init(inner: NSView) {
-        self.inner = inner
-        super.init(frame: NSRect(x: 0, y: 0, width: 428, height: 400))
-        addSubview(inner)
-        inner.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            inner.topAnchor.constraint(equalTo: topAnchor),
-            inner.leadingAnchor.constraint(equalTo: leadingAnchor),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    override func layout() {
-        super.layout()
-        sync()
-    }
-
-    /// Re-measures the natural content (it changes with the capture mode) and resizes the host to match.
-    func refresh() {
-        inner.layoutSubtreeIfNeeded()
-        sync()
-    }
-
-    private func sync() {
-        let natural = inner.fittingSize
-        guard natural.width > 0, natural.height > 0 else { return }
-        if bounds.size != natural { setBoundsSize(natural) }
-        let target = NSSize(width: (natural.width * scale).rounded(), height: (natural.height * scale).rounded())
-        if frame.size != target {
-            setFrameSize(target)
-            onSize?(target)
-        }
     }
 }
