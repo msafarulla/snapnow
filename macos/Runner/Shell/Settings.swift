@@ -97,7 +97,7 @@ final class SettingsWindowController: NSWindowController {
         // the top on every toggle ("checking or unchecking scrolls me back", 2026-11-06).
         var keepHeight: CGFloat?
         var keepFromTop: CGFloat?
-        if window.isVisible, let old = window.contentView?.subviews.first as? NSScrollView, let doc = old.documentView {
+        if window.isVisible, let old = window.contentView?.subviews.compactMap({ $0 as? NSScrollView }).first, let doc = old.documentView {
             keepHeight = old.bounds.height
             keepFromTop = doc.bounds.height - old.contentView.bounds.maxY
         }
