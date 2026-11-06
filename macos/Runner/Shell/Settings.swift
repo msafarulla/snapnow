@@ -67,7 +67,7 @@ final class SettingsWindowController: NSWindowController {
 
     private init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 600),
-                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "SnapNow Settings"
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -227,17 +227,44 @@ final class SettingsWindowController: NSWindowController {
         resetKeys.bezelStyle = .rounded
         stack.addArrangedSubview(resetKeys)
 
+        // The settings sit in a scroll view and the window is never taller than the screen it is
+        // on: sized to the content's full height, the Shortcuts section at the bottom landed below the
+        // 13" Air's screen edge with no way to reach it (2026-11-05). Resizable vertically; the
+        // width stays the content's own.
         let content = Theme.makeBackdrop()
         stack.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
+        let doc = FlippedView()
+        doc.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            stack.topAnchor.constraint(equalTo: doc.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor),
+        ])
+        let fit = stack.fittingSize
+        doc.frame = NSRect(origin: .zero, size: fit)
+        doc.autoresizingMask = [.width]
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        scroll.documentView = doc
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(scroll)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: content.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
         window.contentView = content
-        window.setContentSize(content.fittingSize)
+        let screenHeight = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
+        let height = min(fit.height, screenHeight - 48)
+        window.contentMinSize = NSSize(width: fit.width, height: min(360, fit.height))
+        window.contentMaxSize = NSSize(width: fit.width, height: fit.height)
+        window.setContentSize(NSSize(width: fit.width, height: height))
+        scroll.contentView.scroll(to: .zero)
     }
 
     private func heading(_ text: String) -> NSTextField {
@@ -471,4 +498,10 @@ enum Tool: Int, CaseIterable {
         ["Select", "Arrow", "Line", "Shape", "Ellipse", "Pen", "Highlight", "Text", "Callout", "Step", "Blur", "Spotlight", "Crop",
          "Copy Text"][rawValue]
     }
+}
+
+
+/// Top-down coordinates so a scrolled settings list starts at its first section, not its last.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
