@@ -20,7 +20,7 @@ hs=/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs
 if [[ ${SNAPLITE_VIA_HS:-0} != 1 && $(launchctl managername 2>/dev/null) != Aqua && -x $hs ]] && pgrep -qx Hammerspoon; then
   log=/tmp/snapnow-install.$$.log; rm -f "$log"
   args=""; for a in "$@"; do args+=" $(printf %q "$a")"; done
-  cmd="export SNAPLITE_VIA_HS=1; cd $(printf %q "$PWD") && tools/install.sh$args > $log 2>&1; echo EXIT=\$? >> $log"
+  cmd="export SNAPLITE_VIA_HS=1; cd $(printf %q "${0:A:h}/..") && tools/install.sh$args > $log 2>&1; echo EXIT=\$? >> $log"
   echo "background session: running the install in the desktop session via Hammerspoon (log: $log)"
   "$hs" -t 10 -c "hs.task.new('/bin/zsh', nil, {'-lc', [[$cmd]]}):start()" >/dev/null 2>&1 &
   hspid=$!; ( sleep 15; kill $hspid 2>/dev/null ) & wait $hspid 2>/dev/null || true
