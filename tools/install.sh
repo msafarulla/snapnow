@@ -56,8 +56,19 @@ keychain=~/Library/Keychains/snaplite-signing.keychain-db
 if [[ -n $identity ]]; then
   keychain_args=()
   if [[ -e $keychain ]]; then
-    # The keychain's password lives in the login keychain; it is read here and never stored
-    security unlock-keychain -p "$(security find-generic-password -a "$USER" -s snaplite-signing-keychain -w)" "$keychain"
+    # Already unlocked (tools/keep-signing-unlocked.sh sets it to never auto-lock, so this is the
+    # normal case, screen locked or not): nothing to do. Otherwise its password lives in the login
+    # keychain - read here, never stored - which macOS only hands out while the user is signed in
+    # at this Mac; say so instead of a cryptic "passphrase not correct".
+    if ! security show-keychain-info "$keychain" >/dev/null 2>&1; then
+      pw=$(security find-generic-password -a "$USER" -s snaplite-signing-keychain -w 2>/dev/null || true)
+      if [[ -z $pw ]] || ! security unlock-keychain -p "$pw" "$keychain"; then
+        echo "signing keychain is locked and the login keychain won't give its password (not signed in at this Mac?)." >&2
+        echo "Sign in at the Pro and run tools/keep-signing-unlocked.sh once; then this works from anywhere." >&2
+        exit 1
+      fi
+      unset pw
+    fi
     keychain_args=(--keychain "$keychain")
   fi
   codesign --force --deep "${keychain_args[@]}" --sign "$identity" "$app"
