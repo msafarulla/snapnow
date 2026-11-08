@@ -107,6 +107,12 @@ class LibraryPageState extends State<LibraryPage> {
   Future<void> openForEditing(String path, {bool fresh = false}) async {
     if (_editing && _editingPath == path) return _editor?.focus();
     if (!await confirmDiscard()) return;
+    if (fresh) {
+      // Saving the capture we are leaving just stamped it "now", which would sort it ahead of the capture
+      // that triggered this: the new one must be the newest, first in the filmstrip.
+      try { File(path).setLastModifiedSync(DateTime.now()); } catch (_) {}
+      _reload();
+    }
     setState(() { _editing = true; _editingPath = path; });
     await WidgetsBinding.instance.endOfFrame;
     await _editor?.openFile(path, fresh: fresh);
