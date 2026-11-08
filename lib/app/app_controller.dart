@@ -97,6 +97,7 @@ class AppController with TrayListener, WindowListener {
   Future<void> openEditor(String path) async {
     await _show();
     _closePushedPages();
+    editorKey.currentState?.closeGifPreview(); // a new capture takes over from the GIF being shown
     await libraryKey.currentState?.openForEditing(path, fresh: true); // a capture that just happened
   }
 
