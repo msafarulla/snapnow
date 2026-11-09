@@ -782,7 +782,9 @@ enum CaptureStamp {
         let text = df.string(from: Date()) as NSString
         // Light and subtle (no pill, no shadow); the colour adapts to the pixels under it so it stays legible
         // on a white capture as well as a dark one.
-        let margin = min(CGFloat(w), CGFloat(h)) * 0.02   // nestle into the (rounded) bottom-right corner
+        // Hug the bottom-right corner very tightly (user, 2026-11-09): a couple of points from the right edge, and the digits'
+        // baseline almost on the bottom edge (the text box's descender space is pulled back below).
+        let margin = 3 * scale
         // Monospaced digits read cleanly as a timestamp and keep an even width.
         func measure(_ s: CGFloat) -> CGSize { text.size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: s, weight: .medium)]) }
         var fontSize = max(11 * scale, CGFloat(h) * 0.013)
@@ -793,7 +795,9 @@ enum CaptureStamp {
         if ts.width > avail, ts.width > 0 { fontSize *= avail / ts.width; ts = measure(fontSize) }
         guard fontSize >= 7 * scale, ts.height <= CGFloat(h) * 0.5 else { return ctx.makeImage() }
         let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
-        let region = CGRect(x: CGFloat(w) - ts.width - margin, y: CGFloat(h) - ts.height - margin, width: ts.width, height: ts.height)
+        let bottomGap = 1.5 * scale
+        let baselineY = bottomGap + font.descender    // descender is negative: digits sit ~1.5pt above the bottom edge
+        let region = CGRect(x: CGFloat(w) - ts.width - margin, y: CGFloat(h) - ts.height - bottomGap, width: ts.width, height: ts.height)
         let onLight = averageLuminance(of: image, in: region) > 0.6
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
@@ -802,7 +806,7 @@ enum CaptureStamp {
         let ns = NSGraphicsContext(cgContext: ctx, flipped: false)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = ns
-        text.draw(at: CGPoint(x: CGFloat(w) - ts.width - margin, y: margin), withAttributes: attrs)
+        text.draw(at: CGPoint(x: CGFloat(w) - ts.width - margin, y: baselineY), withAttributes: attrs)
         NSGraphicsContext.restoreGraphicsState()
         return ctx.makeImage()
     }
