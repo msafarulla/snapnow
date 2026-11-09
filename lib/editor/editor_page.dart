@@ -574,6 +574,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   @override
   void dispose() {
+    if (widget.overlay) _ToolButton.glass = false; // the glass chrome goes with draw mode
     _antsTimer?.cancel();
     _marchTimer?.cancel();
     _playTimer?.cancel();
@@ -2461,6 +2462,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   Widget _glassTheme(Widget child) {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
+    _ToolButton.glass = true;
     final tint = (100 - _glassLevel) / 100.0;            // 0 = clear glass ... 1 = solid card
     Color mix(Color c, double clear, double solid) => c.withValues(alpha: clear + (solid - clear) * tint);
     final glass = SnapChrome.of(context).copyWith(
@@ -2472,7 +2474,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       raised: mix(const Color(0xFFFFFFFF), 0.25, dark ? 0.18 : 1.0),
     );
     WidgetsBinding.instance.addPostFrameCallback((_) => _reportGlass(dark));
-    return Theme(data: theme.copyWith(extensions: [glass]), child: child);
+    // Secondary text and icons at full strength: on glass they have no solid card behind them to stand out from
+    final scheme = theme.colorScheme.copyWith(onSurfaceVariant: theme.colorScheme.onSurface);
+    return Theme(data: theme.copyWith(extensions: [glass], colorScheme: scheme), child: child);
   }
 
   void _reportGlass(bool dark) {
@@ -3191,6 +3195,8 @@ class ToolbarButton extends StatelessWidget {
 }
 
 class _ToolButton extends StatefulWidget {
+  /// True while draw mode's glass chrome is up (set by EditorPageState).
+  static bool glass = false;
   static const width = 52.0;
   static const height = EditorPageState._toolbarHeight - 8;
   final IconData icon;
@@ -3210,8 +3216,10 @@ class _ToolButtonState extends State<_ToolButton> {
   Widget build(BuildContext context) {
     final s = Theme.of(context).colorScheme;
     final enabled = widget.onTap != null;
-    final fg = !enabled ? s.onSurface.withValues(alpha: 0.28)
-        : widget.active || widget.primary ? s.primary : _hover ? s.onSurface : s.onSurfaceVariant;
+    final glass = _ToolButton.glass; // draw mode: icons and labels lead, at full strength with a soft shadow
+    final fg = !enabled ? s.onSurface.withValues(alpha: glass ? 0.4 : 0.28)
+        : widget.active || widget.primary ? s.primary : (_hover || glass) ? s.onSurface : s.onSurfaceVariant;
+    final shadows = glass ? const [Shadow(color: Color(0x66000000), blurRadius: 3, offset: Offset(0, 1))] : null;
     final button = MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -3229,11 +3237,11 @@ class _ToolButtonState extends State<_ToolButton> {
             borderRadius: BorderRadius.circular(10),
           ),
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(widget.icon, size: 19, color: fg),
+            Icon(widget.icon, size: glass ? 22 : 19, color: fg, shadows: shadows),
             const SizedBox(height: 2),
             Text(widget.label, maxLines: 1, overflow: TextOverflow.clip, softWrap: false,
-                style: TextStyle(fontSize: 10, height: 1.1, color: fg, letterSpacing: -0.1,
-                    fontWeight: widget.active ? FontWeight.w600 : FontWeight.w500)),
+                style: TextStyle(fontSize: glass ? 10.5 : 10, height: 1.1, color: fg, letterSpacing: -0.1, shadows: shadows,
+                    fontWeight: widget.active || glass ? FontWeight.w700 : FontWeight.w500)),
           ]),
         ),
       ),
