@@ -1421,6 +1421,23 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     await Native.toast('Saved');
   }
 
+  /// Draw mode ended with the screen as it was behind the glass in [shotPath]: that picture goes under whatever was drawn
+  /// and the whole is saved (picture + markup, so every mark stays editable) as a normal capture. False when nothing was drawn.
+  Future<bool> finishDraw(String shotPath) async {
+    final st = _state;
+    if (st == null || st.annotations.isEmpty) return false;
+    _endTextEdit();
+    try {
+      final frame = await (await ui.instantiateImageCodec(await File(shotPath).readAsBytes())).getNextFrame();
+      setState(() { _state = st.copyWith(image: frame.image); _path = shotPath; });
+      await save();
+      return true;
+    } catch (e, st) {
+      debugPrint('Draw capture not kept: $e\n$st');
+      return false;
+    }
+  }
+
   /// OCR of the whole image: clipboard plus a toast showing what was read.
   Future<void> _copyAllText() async {
     final png = await _flatPng();

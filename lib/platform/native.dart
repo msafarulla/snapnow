@@ -8,7 +8,9 @@ class Native {
   static void Function(String? path)? onRecordingFinished;
   static void Function(String path)? onOpenEditor;
   static void Function(String path)? onOpenDraw;
-  static void Function()? onCloseDraw;
+  /// Draw mode ended: [shot] is the screen as it was behind the glass (null when it could not be taken); the answer is
+  /// whether the drawing was kept as a capture.
+  static Future<bool> Function(String? shot)? onCloseDraw;
   /// Draw mode: how bright the screen is behind the toolbar and the panel (0 black ... 1 white), about every 0.7 s.
   static void Function(List<double> luma)? onGlassLuma;
   static void Function()? onShowLibrary;
@@ -21,7 +23,7 @@ class Native {
         case 'recordingFinished': onRecordingFinished?.call(call.arguments as String?);
         case 'openEditor': onOpenEditor?.call(call.arguments as String);
         case 'openDraw': onOpenDraw?.call(call.arguments as String);
-        case 'closeDraw': onCloseDraw?.call();
+        case 'closeDraw': return await onCloseDraw?.call(call.arguments as String?) ?? false;
         case 'glassLuma': onGlassLuma?.call((call.arguments as List).map((e) => (e as num).toDouble()).toList());
         case 'showLibrary': onShowLibrary?.call();
         case 'capturesChanged': onCapturesChanged?.call();

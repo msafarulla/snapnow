@@ -29,6 +29,11 @@ final class SnapLiteNative {
     channel.invokeMethod(method, arguments: arguments)
   }
 
+  /// Same, but waits for Dart's answer (draw mode asks whether the drawing was saved before it lifts the glass).
+  func invoke(_ method: String, _ arguments: Any? = nil, completion: @escaping (Any?) -> Void) {
+    channel.invokeMethod(method, arguments: arguments) { completion($0) }
+  }
+
   private func handle(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     let args = call.arguments as? [String: Any] ?? [:]
     switch call.method {

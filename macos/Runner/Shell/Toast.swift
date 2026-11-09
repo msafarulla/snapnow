@@ -512,7 +512,7 @@ final class LiveDraw {
 
     private var editorWindow: NSWindow? { NSApp.windows.first { $0 is MainFlutterWindow } }
 
-    func toggle() { active ? leave() : enter() }
+    func toggle() { guard !leaving else { return }; active ? leave() : enter() }
 
     private func enter() {
         let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
@@ -684,22 +684,61 @@ final class LiveDraw {
         frostWindow = nil; frost = nil
     }
 
+    private var leaving = false
+
+    /// The screen as it is behind the glass (SnapNow's own windows left out), as a normal capture file, or nil.
+    @MainActor private func screenWithoutOverlay() async -> URL? {
+        guard let w = editorWindow, let screen = w.screen ?? NSScreen.main,
+              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              CGPreflightScreenCaptureAccess(),
+              let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+              let display = content.displays.first(where: { $0.displayID == id }) else { return nil }
+        let mine = content.windows.filter { $0.owningApplication?.processID == ProcessInfo.processInfo.processIdentifier }
+        let config = SCStreamConfiguration()
+        config.width = Int(screen.frame.width * screen.backingScaleFactor)     // the glass canvas is exactly this size in pixels
+        config.height = Int(screen.frame.height * screen.backingScaleFactor)
+        config.showsCursor = false
+        config.captureResolution = .best
+        guard let image = try? await SCScreenshotManager.captureImage(
+            contentFilter: SCContentFilter(display: display, excludingWindows: mine), configuration: config) else { return nil }
+        let rep = NSBitmapImageRep(cgImage: image)
+        rep.size = screen.frame.size
+        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        let url = Capture.newCaptureURL(prefix: "SnapNow Session")
+        return (try? png.write(to: url)) != nil ? url : nil
+    }
+
+    /// Lifting the glass: if anything was drawn, the screen behind it becomes the picture under the drawing and the
+    /// whole thing is saved as a normal capture (the Library / editor open it again with every mark still editable);
+    /// an empty glass leaves nothing behind.
     private func leave() {
+        guard !leaving else { return }
+        leaving = true
         active = false
         sampling?.cancel(); lastRects = []
-        SnapLiteNative.shared?.invoke("closeDraw")      // the editor goes back to normal, discarding the drawing
-        removeFrost()
-        restoreWindow()
-        editorWindow?.orderOut(nil)
-        NSApp.hide(nil)                       // focus goes back to the app you were showing
-        if let s = session {
-            let attrs = try? FileManager.default.attributesOfItem(atPath: s.url.path)
-            let unchanged = (attrs?[.modificationDate] as? Date) == s.modified && (attrs?[.size] as? Int) == s.size
-            if unchanged {                    // nothing saved over the snapshot: it was only a backdrop
-                try? FileManager.default.removeItem(at: s.url)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let shot = await self.screenWithoutOverlay()       // before the glass goes, so the drawing is not in it
+            let finish = { (kept: Bool) in
+                if let shot, !kept { try? FileManager.default.removeItem(at: shot) }
                 SnapLiteNative.shared?.invoke("capturesChanged")
+                self.removeFrost()
+                self.restoreWindow()
+                self.editorWindow?.orderOut(nil)
+                NSApp.hide(nil)                       // focus goes back to the app you were showing
+                if let s = self.session {
+                    let attrs = try? FileManager.default.attributesOfItem(atPath: s.url.path)
+                    let unchanged = (attrs?[.modificationDate] as? Date) == s.modified && (attrs?[.size] as? Int) == s.size
+                    if unchanged { try? FileManager.default.removeItem(at: s.url) }   // only ever a scratch canvas
+                }
+                self.session = nil
+                self.leaving = false
+            }
+            if let invoker = SnapLiteNative.shared {
+                invoker.invoke("closeDraw", shot?.path) { result in finish((result as? Bool) ?? false) }
+            } else {
+                finish(false)
             }
         }
-        session = nil
     }
 }

@@ -109,7 +109,15 @@ class AppController with TrayListener, WindowListener {
 
   bool drawing = false;
 
-  void closeDraw() { drawing = false; libraryKey.currentState?.closeDraw(); }
+  /// Draw mode ended. When something was drawn, the editor puts the screen [shot] under the drawing and saves it as a
+  /// normal capture (every mark stays editable from the Library); returns whether it was kept.
+  Future<bool> closeDraw(String? shot) async {
+    var kept = false;
+    if (shot != null) kept = await editorKey.currentState?.finishDraw(shot) ?? false;
+    drawing = false;
+    libraryKey.currentState?.closeDraw();
+    return kept;
+  }
 
   /// Opens a capture in the editor (Library edit mode, with the filmstrip of all captures).
   Future<void> openEditor(String path) async {
