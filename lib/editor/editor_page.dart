@@ -166,6 +166,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Native.getString('gifEntrance').then((v) async {
       var e = Entrance.values.where((e) => e.name == v).firstOrNull;
       e ??= (await Native.getBool('gifFourier')) == true ? Entrance.fourier : null; // the older on/off setting
+      if (e == Entrance.envelope) e = Entrance.draw; // String art was removed from the choices; a saved choice falls back to Draw
       if (mounted && e != null) setState(() => BuildUpGif.entrance = e!);
     });
     Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });

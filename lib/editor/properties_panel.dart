@@ -265,7 +265,7 @@ class PropertiesPanel extends StatelessWidget {
               message: 'How lines, pen strokes and outlines appear in animated GIFs',
               waitDuration: const Duration(milliseconds: 700),
               child: _Segmented<Entrance>(
-                values: Entrance.values, selected: host.gifEntrance,
+                values: [for (final e in Entrance.values) if (e != Entrance.envelope) e], selected: host.gifEntrance, // String art is retired from the choices
                 label: (e) => e.label, tooltip: (e) => e.tip, onTap: host.setGifEntrance, itemWidth: 62),
             ),
           ]),
