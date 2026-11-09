@@ -9,6 +9,16 @@ enum Prefs {
     static let microphone = "recordMicrophone"
     /// Option+click anywhere shows the pointing hand (same as the WMOS automation). Default on.
     static let altClickHand = "altClickHand"
+    /// Double-tap Option freezes the screen and opens it full-screen in the editor for drawing (session mode). Default on.
+    static let liveDraw = "liveDrawMode"
+    /// Glass level of draw mode's toolbar and panel, in percent: 100 clear frosted glass ... 0 solid. Default 100.
+    static let liveDrawGlass = "liveDrawGlass"
+    static let glassChoices: [(label: String, value: Int)] = [("100% glass (clear)", 100), ("75% glass", 75), ("50% glass", 50),
+                                                                 ("25% glass", 25), ("0% (solid)", 0)]
+    static var glassLevel: Int {
+        let v = UserDefaults.standard.string(forKey: liveDrawGlass).flatMap(Int.init) ?? 100
+        return glassChoices.map(\.value).contains(v) ? v : 100
+    }
     /// Format Save As starts on; empty means the last one used.
     static let saveAsFormat = "saveAs.defaultFormat"
     /// Animated GIF frames a second ("15", "25" or "50"); the editor reads it each time it makes a GIF.
@@ -122,6 +132,17 @@ final class SettingsWindowController: NSWindowController {
         appearance.action = #selector(appearanceChosen(_:))
         stack.addArrangedSubview(row("Theme", appearance))
         stack.addArrangedSubview(note("Glass follows your Mac's light/dark mode and accent color. Tokyo Night matches your terminal."))
+
+        // Draw mode (double-tap Option)
+        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(heading("Draw mode"))
+        let glass = NSPopUpButton(frame: .zero, pullsDown: false)
+        glass.addItems(withTitles: Prefs.glassChoices.map { $0.label })
+        glass.selectItem(at: Prefs.glassChoices.firstIndex { $0.value == Prefs.glassLevel } ?? 0)
+        glass.target = self
+        glass.action = #selector(glassChosen(_:))
+        stack.addArrangedSubview(row("Glass", glass))
+        stack.addArrangedSubview(note("Double-tap Option lays this over your screen to draw on. 100% is clear frosted glass; lower values tint the toolbar and panel, down to solid."))
 
         // Toolbar
         stack.addArrangedSubview(separator())
@@ -354,6 +375,10 @@ final class SettingsWindowController: NSWindowController {
     }
 
     // MARK: - Actions
+
+    @objc private func glassChosen(_ sender: NSPopUpButton) {
+        UserDefaults.standard.set(String(Prefs.glassChoices[sender.indexOfSelectedItem].value), forKey: Prefs.liveDrawGlass)
+    }
 
     @objc private func appearanceChosen(_ sender: NSPopUpButton) {
         Theme.choice = AppearanceChoice.allCases[sender.indexOfSelectedItem]   // posts Theme.changed, which rebuilds this window

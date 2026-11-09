@@ -5,6 +5,15 @@ import window_manager
 class MainFlutterWindow: NSWindow {
   private var native: SnapLiteNative?
 
+  /// Draw mode (double-tap Option) makes this a borderless, display-sized overlay: it must be allowed to take
+  /// the keyboard and to sit over the menu bar and Dock, which AppKit would otherwise squeeze it below.
+  var drawMode = false
+  override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { true }
+  override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+    drawMode ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+  }
+
   override func awakeFromNib() {
     CaptureFiles.migrateOldFolder()   // before Flutter or the shell touch the captures folder
     let flutterViewController = FlutterViewController()

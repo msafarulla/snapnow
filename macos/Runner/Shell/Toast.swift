@@ -1,4 +1,5 @@
 import AppKit
+import FlutterMacOS
 
 /// A short notice near the bottom of the screen that fades on its own. It can carry a preview of
 /// copied text (`detail`); it stays while the mouse is over it and never takes focus.
@@ -457,4 +458,181 @@ final class AltClickHand {
         "edeuif+FVpFkMvluMBjsDoVCXeQhMckETqYXyZho7e5EAJUXv7xNWdsyEEiGdtnuUdGcOh8UhBF1ddyGWCwuQ2tdL5m2XGntatA1runp6TyVnqGhoTzRNwdB" +
         "DwILuwd+JtpSk+i6tCWEPibTPQo+s4ac5gU7RRnSiPV+vtt+7QroGpdNFXXNzEz/p0Jh/Df4lUrYYNk9xLTjh9IrpEsZTXS0N0csFuuz/T8inC+7OV9p7Qro" +
         "M6zyxHv5z6tZ5XQ6T6LW2V2P1q5NeYa1K1jOpq3/D9cIFDnsLktAAAAAAElFTkSuQmCC"
+}
+
+
+/// Draw mode for sessions: double-tap Option lays a clear glass over the screen under the mouse (a transparent,
+/// borderless SnapNow editor window, top strip and right panel floating on it, every tool) so you can draw arrows,
+/// boxes and highlights over the live desktop; double-tap Option again (or ⌘W) lifts it.
+/// What you drew stays until you leave; the scratch canvas file is deleted on exit unless you saved over it.
+/// A tap is Option pressed and released alone, quickly, with no key, click or scroll in between (so the
+/// Option+click hand and Option shortcuts never count). Needs Accessibility for the global modifier monitor.
+final class LiveDraw {
+    static let shared = LiveDraw()
+    private(set) var active = false
+    private var monitors: [Any] = []
+    private var downAt: Date?
+    private var lastTap: Date?
+    private var dirty = false
+    private var saved: (frame: NSRect, level: NSWindow.Level, mask: NSWindow.StyleMask, shadow: Bool, opaque: Bool, color: NSColor, flutter: NSColor?)?
+    private var session: (url: URL, modified: Date, size: Int)?
+    private let promptedKey = "liveDraw.promptedAccessibility"
+
+    func start() {
+        guard monitors.isEmpty else { return }
+        if !AXIsProcessTrusted(), !UserDefaults.standard.bool(forKey: promptedKey) {
+            UserDefaults.standard.set(true, forKey: promptedKey)
+            _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        }
+        let busy: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] e in self?.flags(e) }) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] e in self?.flags(e); return e }) { monitors.append(m) }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: busy, handler: { [weak self] _ in self?.dirty = true }) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: busy, handler: { [weak self] e in self?.dirty = true; return e }) { monitors.append(m) }
+    }
+
+    private func flags(_ event: NSEvent) {
+        guard UserDefaults.standard.bool(forKey: Prefs.liveDraw) else { return }
+        let f = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        if f == [.option] {
+            downAt = Date(); dirty = false
+        } else if f.isEmpty, let down = downAt {
+            downAt = nil
+            let now = Date()
+            if !dirty, now.timeIntervalSince(down) < 0.3 {
+                if let last = lastTap, now.timeIntervalSince(last) < 0.45 { lastTap = nil; toggle() } else { lastTap = now }
+            } else {
+                lastTap = nil
+            }
+        } else {
+            downAt = nil; lastTap = nil
+        }
+    }
+
+    private var editorWindow: NSWindow? { NSApp.windows.first { $0 is MainFlutterWindow } }
+
+    func toggle() { active ? leave() : enter() }
+
+    private func enter() {
+        let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
+        guard let screen, let url = glassCanvas(for: screen) else { return }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        session = (url, (attrs?[.modificationDate] as? Date) ?? Date(), (attrs?[.size] as? Int) ?? 0)
+        active = true
+        NSApp.activate()
+        expand()                          // a clear, display-sized window BEFORE the editor shows, so it never flashes as a normal window
+        editorWindow?.makeKeyAndOrderFront(nil)
+        SnapLiteNative.shared?.invoke("openDraw", url.path)
+        for delay in [0.3, 0.8] {         // once more after Flutter shows it, in case the window manager resized it
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in if self?.active == true { self?.expand() } }
+        }
+    }
+
+    /// A fully transparent PNG the size of the display in pixels: the "glass" the drawing goes on.
+    private func glassCanvas(for screen: NSScreen) -> URL? {
+        let scale = screen.backingScaleFactor
+        let w = Int(screen.frame.width * scale), h = Int(screen.frame.height * scale)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let cg = ctx.makeImage() else { return nil }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        rep.size = screen.frame.size
+        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("SnapLite", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("glass-\(Int(Date().timeIntervalSince1970)).png")
+        return (try? png.write(to: url)) != nil ? url : nil
+    }
+
+    // The frosted layer under Flutter, visible only inside the floating cards (see EditorPageState._glassTheme). It lives in a
+    // child window just below the editor window: subviews of Flutter's own view would be drawn over Flutter's content.
+    private var frostWindow: NSWindow?
+    private var frost: NSVisualEffectView?
+
+    func setGlass(rects: [CGRect], radius: CGFloat, dark: Bool) {
+        guard active, let w = editorWindow else { return }
+        if frostWindow == nil {
+            let fw = NSWindow(contentRect: w.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            fw.isOpaque = false
+            fw.backgroundColor = .clear
+            fw.hasShadow = false
+            fw.ignoresMouseEvents = true
+            fw.isReleasedWhenClosed = false
+            fw.level = w.level
+            let v = NSVisualEffectView(frame: NSRect(origin: .zero, size: w.frame.size))
+            v.autoresizingMask = [.width, .height]
+            v.material = .hudWindow
+            v.blendingMode = .behindWindow
+            v.state = .active
+            fw.contentView = v
+            w.addChildWindow(fw, ordered: .below)
+            frostWindow = fw
+            frost = v
+        }
+        guard let fw = frostWindow, let v = frost else { return }
+        fw.setFrame(w.frame, display: true)
+        v.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        v.material = dark ? .hudWindow : .popover      // .hudWindow is dark in both appearances; .popover is the light, bright frost
+        v.maskImage = NSImage(size: w.frame.size, flipped: true) { _ in      // flipped: window points, y down, as Flutter reports them
+            NSColor.black.setFill()
+            for r in rects { NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius).fill() }
+            return true
+        }
+    }
+
+    private func expand() {
+        guard let w = editorWindow,
+              let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main else { return }
+        let flutter = w.contentViewController as? FlutterViewController
+        if saved == nil { saved = (w.frame, w.level, w.styleMask, w.hasShadow, w.isOpaque, w.backgroundColor, flutter?.backgroundColor) }
+        // borderless: no title bar, traffic lights, rounded corners or shadow; the picture is the screen itself
+        (w as? MainFlutterWindow)?.drawMode = true
+        w.styleMask = [.borderless]
+        w.hasShadow = false
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        flutter?.backgroundColor = .clear
+        w.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.mainMenuWindow)) + 1)   // over the menu bar and Dock
+        w.setFrame(screen.frame, display: true, animate: false)
+    }
+
+    /// Back to the editor's normal size and place; also called before any normal editor open so it never opens full-screen.
+    func restoreWindow() {
+        guard let saved, let w = editorWindow else { return }
+        (w as? MainFlutterWindow)?.drawMode = false
+        w.styleMask = saved.mask
+        w.isOpaque = saved.opaque
+        w.backgroundColor = saved.color
+        if let f = w.contentViewController as? FlutterViewController, let c = saved.flutter { f.backgroundColor = c }
+        w.hasShadow = saved.shadow
+        w.level = saved.level
+        w.setFrame(saved.frame, display: true, animate: false)
+        self.saved = nil
+    }
+
+    /// ⌘W / the editor's close while in draw mode.
+    func endFromEditor() { if active { leave() } }
+
+    private func removeFrost() {
+        if let fw = frostWindow { editorWindow?.removeChildWindow(fw); fw.orderOut(nil) }
+        frostWindow = nil; frost = nil
+    }
+
+    private func leave() {
+        active = false
+        SnapLiteNative.shared?.invoke("closeDraw")      // the editor goes back to normal, discarding the drawing
+        removeFrost()
+        restoreWindow()
+        editorWindow?.orderOut(nil)
+        NSApp.hide(nil)                       // focus goes back to the app you were showing
+        if let s = session {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: s.url.path)
+            let unchanged = (attrs?[.modificationDate] as? Date) == s.modified && (attrs?[.size] as? Int) == s.size
+            if unchanged {                    // nothing saved over the snapshot: it was only a backdrop
+                try? FileManager.default.removeItem(at: s.url)
+                SnapLiteNative.shared?.invoke("capturesChanged")
+            }
+        }
+        session = nil
+    }
 }

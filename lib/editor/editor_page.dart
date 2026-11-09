@@ -36,7 +36,10 @@ class EditorPage extends StatefulWidget {
   final EdgeInsets chromeInsets;
   /// An optional first group in the floating toolbar (the Library's back button).
   final Widget? leading;
-  const EditorPage({super.key, this.chromeInsets = EdgeInsets.zero, this.leading});
+  /// Draw mode (double-tap Option): the window is a borderless, display-sized overlay and the picture is the frozen
+  /// screen at 1:1 from the top-left corner, so it reads as the real screen; the chrome floats over it.
+  final bool overlay;
+  const EditorPage({super.key, this.chromeInsets = EdgeInsets.zero, this.leading, this.overlay = false});
   @override
   State<EditorPage> createState() => EditorPageState();
 }
@@ -361,7 +364,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   /// Where the floating chrome sits over the canvas area, so the picture is fitted and centred in the rest.
-  EdgeInsets get _chromeInsets => widget.chromeInsets + EdgeInsets.only(
+  EdgeInsets get _chromeInsets => widget.overlay ? EdgeInsets.zero : widget.chromeInsets + EdgeInsets.only(
         top: _toolbarLeft ? 0 : _toolbarHeight + _chromeMargin * 2,
         left: _toolbarLeft ? _toolbarLeftWidth + _chromeMargin * 2 : 0,
         right: _inspectorShown ? PropertiesPanel.width + _chromeMargin * 2 : 0,
@@ -1297,7 +1300,13 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     _clearCopied();
     _refreshImageBytes();
     await windowManager.setTitle('SnapNow — ${path.split('/').last}');
-    if (fresh && mounted && ((await Native.getBool('capture.openInCrop')) ?? true) && mounted) _setTool(Tool.crop);
+    if (widget.overlay) {
+      final level = int.tryParse(await Native.getString('liveDrawGlass') ?? '');
+      if (mounted && level != null && level != _glassLevel) setState(() => _glassLevel = level.clamp(0, 100));
+      if (mounted) _setTool(Tool.arrow); // draw mode starts on the Arrow, ready to point at things
+    } else if (fresh && mounted && ((await Native.getBool('capture.openInCrop')) ?? true) && mounted) {
+      _setTool(Tool.crop);
+    }
   }
 
   /// Drops whatever was mid-way on the old picture (text being typed, a pending crop frame, a drag, a ⌘A
@@ -2397,18 +2406,18 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Positioned dock(bool left, Widget child) => left
         ? Positioned(top: m, left: m, bottom: m + widget.chromeInsets.bottom, width: _toolbarLeftWidth, child: child)
         : Positioned(top: m, left: m, right: m + inspectorRoom, height: _toolbarHeight, child: child);
-    return Scaffold(
-      backgroundColor: chrome.backdrop,
+    final scaffold = Scaffold(
+      backgroundColor: widget.overlay ? Colors.transparent : chrome.backdrop, // draw mode: a clear glass over the live screen
       body: LayoutBuilder(builder: (context, c) => Stack(key: _chromeKey, children: [
         Positioned.fill(child: state == null ? const Center(child: CircularProgressIndicator()) : _canvasArea(state)),
         // The toolbar card, centred in its dock; dimmed while its grip is being dragged
-        dock(_toolbarLeft, Opacity(opacity: dragging ? 0.35 : 1, child: Center(child: _toolbar()))),
+        dock(_toolbarLeft, Opacity(opacity: dragging ? 0.35 : 1, child: Center(child: KeyedSubtree(key: _glassToolbarKey, child: _toolbar())))),
         if (_inspectorShown)
           Positioned(
             top: m,
             right: m,
             bottom: m + widget.chromeInsets.bottom,
-            child: PropertiesPanel(host: this, onClose: _toggleInspector),
+            child: KeyedSubtree(key: _glassPanelKey, child: PropertiesPanel(host: this, onClose: _toggleInspector)),
           ),
         if (_toolbarDragAt case final at?) ...[
           // The dock the drop would land in, lit up
@@ -2439,6 +2448,43 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         ],
       ])),
     );
+    return widget.overlay ? _glassTheme(scaffold) : scaffold;
+  }
+
+  // ---- Draw mode glass ----
+  final _glassToolbarKey = GlobalKey(), _glassPanelKey = GlobalKey();
+  int _glassLevel = 100; // Settings › Draw mode › Glass, in percent (read when draw mode opens)
+
+  /// The cards in draw mode are clear glass: their fill is a light tint (theme-coloured), and the blur behind them
+  /// is a native frosted layer the window draws under Flutter, masked to these rectangles (the desktop is not
+  /// visible to Flutter, so BackdropFilter cannot blur it).
+  Widget _glassTheme(Widget child) {
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final tint = (100 - _glassLevel) / 100.0;            // 0 = clear glass ... 1 = solid card
+    Color mix(Color c, double clear, double solid) => c.withValues(alpha: clear + (solid - clear) * tint);
+    final glass = SnapChrome.of(context).copyWith(
+      card: mix(dark ? const Color(0xFF14161C) : const Color(0xFFFFFFFF), 0.04, 0.96),
+      border: dark ? Color.fromARGB((0x33 + (0x40 * tint)).round(), 255, 255, 255) : Color.fromARGB((0x80 - (0x50 * tint)).round(), 255, 255, 255),
+      shadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 18, offset: Offset(0, 6))],
+      control: mix(dark ? const Color(0xFFFFFFFF) : const Color(0xFFFFFFFF), 0.12, dark ? 0.10 : 0.9),
+      controlBorder: dark ? const Color(0x33FFFFFF) : const Color(0x33000000),
+      raised: mix(const Color(0xFFFFFFFF), 0.25, dark ? 0.18 : 1.0),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reportGlass(dark));
+    return Theme(data: theme.copyWith(extensions: [glass]), child: child);
+  }
+
+  void _reportGlass(bool dark) {
+    if (!mounted) return;
+    final rects = <List<double>>[];
+    for (final key in [_glassToolbarKey, _glassPanelKey]) {
+      final box = key.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.attached || !box.hasSize) continue;
+      final o = box.localToGlobal(Offset.zero);
+      rects.add([o.dx, o.dy, box.size.width, box.size.height, SnapChrome.radius]);
+    }
+    Native.glassRects(_glassLevel == 0 ? const [] : rects, dark: dark); // solid cards need no frost behind them
   }
 
   /// The canvas: the image centred with a soft shadow, and one full-size input/paint layer over the whole
@@ -2446,7 +2492,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   Widget _canvasArea(CanvasState state) {
     _syncMarch(state);
     return LayoutBuilder(builder: (context, constraints) {
-      const pad = 20.0, labelGap = 34.0; // labelGap: room under the image for the editable dimensions
+      final pad = widget.overlay ? 0.0 : 20.0, labelGap = widget.overlay ? 0.0 : 34.0; // labelGap: room under the image for the editable dimensions
       final iw = state.image.width.toDouble(), ih = state.image.height.toDouble();
       // Display at the ORIGINAL capture's footprint, so reducing the pixel count (for a smaller file) makes
       // the picture grainier without shrinking it on the canvas. Falls back to the current size pre-load.
@@ -2491,7 +2537,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
               left: origin.dx, top: origin.dy, width: fitted.width, height: fitted.height,
               child: Container(
                 key: _canvasKey,
-                decoration: const BoxDecoration(boxShadow: [BoxShadow(color: Color(0x33000000), blurRadius: 14, offset: Offset(0, 3))]),
+                decoration: widget.overlay ? null : const BoxDecoration(boxShadow: [BoxShadow(color: Color(0x33000000), blurRadius: 14, offset: Offset(0, 3))]),
               ),
             ),
             Positioned.fill(
@@ -2577,7 +2623,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
               ),
             ),
             // The image's own pixel size, centred just under it — editable to resize the canvas.
-            Positioned(
+            if (!widget.overlay) Positioned(
               left: origin.dx, top: origin.dy + fitted.height + 4, width: fitted.width,
               child: Center(
                 child: _CanvasDimsEditor(

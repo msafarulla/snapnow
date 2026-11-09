@@ -37,9 +37,15 @@ final class SnapLiteNative {
       switch args["action"] as? String {
       case "openImage": Shell.shared.openImage()
       case "settings": Shell.shared.showSettings()
+      case "endDraw": LiveDraw.shared.endFromEditor()
       case let name?: if let action = ShortcutAction(rawValue: name) { Shell.shared.perform(action) }
       default: break
       }
+      result(nil)
+    case "glassRects":
+      let rects = (args["rects"] as? [[Double]]) ?? []
+      LiveDraw.shared.setGlass(rects: rects.map { CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) },
+                               radius: CGFloat(rects.first?[4] ?? 14), dark: args["dark"] as? Bool ?? true)
       result(nil)
     case "copyText":
       Shell.copyText(args["text"] as? String ?? "")

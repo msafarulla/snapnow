@@ -7,6 +7,8 @@ class Native {
   static const _ch = MethodChannel('snaplite/native');
   static void Function(String? path)? onRecordingFinished;
   static void Function(String path)? onOpenEditor;
+  static void Function(String path)? onOpenDraw;
+  static void Function()? onCloseDraw;
   static void Function()? onShowLibrary;
   static void Function()? onCapturesChanged;
   static void Function(String choice)? onAppearanceChanged;
@@ -16,6 +18,8 @@ class Native {
       switch (call.method) {
         case 'recordingFinished': onRecordingFinished?.call(call.arguments as String?);
         case 'openEditor': onOpenEditor?.call(call.arguments as String);
+        case 'openDraw': onOpenDraw?.call(call.arguments as String);
+        case 'closeDraw': onCloseDraw?.call();
         case 'showLibrary': onShowLibrary?.call();
         case 'capturesChanged': onCapturesChanged?.call();
         case 'colorPicked': onColorPicked?.call(call.arguments as int);
@@ -30,6 +34,8 @@ class Native {
   static Future<void> copyText(String text) => _call('copyText', {'text': text});
   static Future<void> toast(String message, {String symbol = 'checkmark.circle.fill'}) =>
       _call('toast', {'message': message, 'symbol': symbol});
+  /// Draw mode: the rectangles (x, y, w, h, radius in window points) of the floating cards, which the window frosts.
+  static Future<void> glassRects(List<List<double>> rects, {required bool dark}) => _call('glassRects', {'rects': rects, 'dark': dark});
   static Future<List<int>?> toolbarTools() async => (await _call<List>('toolbarTools'))?.cast<int>();
 
   static Future<Uint8List?> thumbnail(String path, {double size = 180}) =>

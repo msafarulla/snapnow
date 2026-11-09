@@ -103,6 +103,24 @@ class LibraryPageState extends State<LibraryPage> {
 
   // ---- Modes ----
 
+  /// Draw mode (double-tap Option): the editor alone, full-window, over the frozen screen; no filmstrip, no Library button.
+  bool _draw = false;
+
+  Future<void> openDraw(String path) async {
+    setState(() { _draw = true; _editing = true; _editingPath = path; });
+    await WidgetsBinding.instance.endOfFrame;
+    await _editor?.openFile(path, fresh: true);
+    _editor?.focus();
+  }
+
+  /// Leaves draw mode WITHOUT saving: the drawing was only on top of a snapshot; ⌘S / Copy / Share inside draw
+  /// mode are how it is kept.
+  void closeDraw() {
+    if (!_draw) return;
+    setState(() { _draw = false; _editing = false; _editingPath = null; });
+    _reload();
+  }
+
   /// Enters (or switches within) edit mode, saving any unsaved edits first.
   Future<void> openForEditing(String path, {bool fresh = false}) async {
     if (_editing && _editingPath == path) return _editor?.focus();
@@ -348,6 +366,12 @@ class LibraryPageState extends State<LibraryPage> {
   /// filmstrip of all captures floats along the bottom (the editor keeps the picture clear of it).
   Widget _editMode(BuildContext context) {
     const m = 10.0;
+    if (_draw) {
+      return Scaffold(
+        backgroundColor: Colors.transparent,
+        body: EditorPage(key: AppController.instance.editorKey, overlay: true),
+      );
+    }
     return Scaffold(
       body: Stack(children: [
         Positioned.fill(

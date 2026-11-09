@@ -59,6 +59,8 @@ class AppController with TrayListener, WindowListener {
     trace('init start');
     Native.init();
     Native.onOpenEditor = openEditor;
+    Native.onOpenDraw = openDraw;
+    Native.onCloseDraw = closeDraw;
     Native.onShowLibrary = showLibrary;
     Native.onCapturesChanged = () => capturesVersion.value++;
     Native.onAppearanceChanged = (choice) => appearance.value = choice;
@@ -92,6 +94,22 @@ class AppController with TrayListener, WindowListener {
     await windowManager.focus();
     await Native.activate();
   }
+
+  /// Draw mode: the native side has already sized the window to the display and removed its title bar; the editor
+  /// shows the frozen screen 1:1 with its tools floating over it. (No _show(): it would resize and centre the window.)
+  Future<void> openDraw(String path) async {
+    _closePushedPages();
+    drawing = true;
+    // Show first: a hidden window schedules no frames, so waiting for one before showing would wait forever
+    await windowManager.show();
+    await libraryKey.currentState?.openDraw(path);
+    await windowManager.focus();
+    await Native.activate();
+  }
+
+  bool drawing = false;
+
+  void closeDraw() { drawing = false; libraryKey.currentState?.closeDraw(); }
 
   /// Opens a capture in the editor (Library edit mode, with the filmstrip of all captures).
   Future<void> openEditor(String path) async {
@@ -133,12 +151,14 @@ class AppController with TrayListener, WindowListener {
 
   @override
   void onWindowClose() async {
+    if (drawing) return Native.shell('endDraw');   // ⌘W / close leaves draw mode (the drawing is discarded unless saved)
     if (await libraryKey.currentState?.confirmDiscard() ?? true) await windowManager.hide();
   }
 
   /// Esc: saves any edits without asking (unlike ⌘W), then hides the window; with the copied GIF
   /// playing over the editor it only closes that preview.
   Future<void> saveAndClose() async {
+    if (drawing) return;                           // Esc never leaves draw mode (it would lose the drawing); double-tap ⌥ or ⌘W does
     final editor = editorKey.currentState;
     if (editor?.closeGifPreview() ?? false) return;
     if (editor != null && editor.hasUnsavedChanges) await editor.save();
