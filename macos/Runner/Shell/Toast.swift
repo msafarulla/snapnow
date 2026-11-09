@@ -726,13 +726,19 @@ final class LiveDraw {
         sampling?.cancel(); lastRects = []
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let shot = await self.screenWithoutOverlay()       // before the glass goes, so the drawing is not in it
+            // The glass goes at once (clear, frost off); the capture and the save then happen behind it. The screenshot leaves
+            // SnapNow's own windows out anyway, so the drawing is not in it.
+            self.removeFrost()
+            self.editorWindow?.alphaValue = 0
+            try? await Task.sleep(nanoseconds: 60_000_000)      // one frame for the compositor to drop it
+            let shot = await self.screenWithoutOverlay()
             let finish = { (kept: Bool) in
                 if let shot, !kept { try? FileManager.default.removeItem(at: shot) }
                 SnapLiteNative.shared?.invoke("capturesChanged")
                 self.removeFrost()
                 self.restoreWindow()
                 self.editorWindow?.orderOut(nil)
+                self.editorWindow?.alphaValue = 1
                 NSApp.hide(nil)                       // focus goes back to the app you were showing
                 if let s = self.session {
                     let attrs = try? FileManager.default.attributesOfItem(atPath: s.url.path)
