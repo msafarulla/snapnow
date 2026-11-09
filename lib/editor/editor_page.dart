@@ -1433,10 +1433,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   /// Draw mode ended with the screen as it was behind the glass in [shotPath]: that picture goes under whatever was drawn
-  /// and the whole is saved (picture + markup, so every mark stays editable) as a normal capture. False when nothing was drawn.
+  /// and the whole is saved (picture + markup, so every mark stays editable) as a normal capture, even when nothing was drawn.
   Future<bool> finishDraw(String shotPath) async {
     final st = _state;
-    if (st == null || st.annotations.isEmpty) return false;
+    if (st == null) return false; // an empty glass is saved too: the screen was the point of the session
     _endTextEdit();
     try {
       final frame = await (await ui.instantiateImageCodec(await File(shotPath).readAsBytes())).getNextFrame();
