@@ -3055,7 +3055,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     // Everything that can live on the bar, in priority order: preferred tools, the rest, then the actions.
     // The bar fits as many as the width allows; only the leftover goes into "More", which is dropped entirely
     // when nothing overflows. (On macOS, saving/opening/GIF live in the menu bar, so only Add Image + Logo.)
-    final items = <(String, IconData, String)>[
+    var items = <(String, IconData, String)>[
       for (final t in _toolOrder) if (_visibleTools.contains(t)) (t.name, _toolInfo[t]!.$1, _toolInfo[t]!.$2),
       for (final t in _toolOrder) if (!_visibleTools.contains(t)) (t.name, _toolInfo[t]!.$1, _toolInfo[t]!.$2),
       ('overlay', Icons.add_photo_alternate_outlined, 'Image'),
@@ -3071,6 +3071,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         ('copyGif', Icons.gif_outlined, 'Copy as Animated GIF  ⇧⌘C'),
       ],
     ];
+    if (widget.overlay) {
+      // Draw mode keeps to the tools for pointing and marking things up, in this order (Undo/Redo and the Inspector stay)
+      final byName = {for (final i in items) i.$1: i};
+      items = [for (final n in const ['arrow', 'box', 'step', 'line', 'pen', 'logo', 'text', 'callout']) if (byName[n] != null) byName[n]!];
+    }
     void run(String v) {
       final t = Tool.values.where((t) => t.name == v).firstOrNull;
       if (t != null) return _setTool(t == Tool.box ? _shapeKind.tool : t);
@@ -3096,7 +3101,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       _ToolButton(icon: Icons.undo, label: 'Undo', onTap: _undo.isEmpty ? null : _undoAction),
       _ToolButton(icon: Icons.redo, label: 'Redo', onTap: _redo.isEmpty ? null : _redoAction),
       _ToolbarGap(vertical: _toolbarLeft),
-      if (Platform.isMacOS) KeyedSubtree(key: ghost ? null : _shareKey, child: _ToolButton(icon: Icons.ios_share, label: 'Share', onTap: share)),
+      if (Platform.isMacOS && !widget.overlay) KeyedSubtree(key: ghost ? null : _shareKey, child: _ToolButton(icon: Icons.ios_share, label: 'Share', onTap: share)),
       if (!Platform.isMacOS) ...[
         _ToolButton(icon: Icons.content_copy, label: 'Copy', onTap: _copyImage),
         _ToolButton(icon: Icons.save_outlined, label: 'Save', onTap: save, primary: hasUnsavedChanges),
