@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
@@ -100,6 +101,9 @@ class AppController with TrayListener, WindowListener {
   Future<void> openDraw(String path) async {
     _closePushedPages();
     drawing = true;
+    // Pointer events aligned to the display's frames and interpolated between samples: the stroke follows the hand evenly
+    GestureBinding.instance.resamplingEnabled = true;
+    GestureBinding.instance.samplingOffset = const Duration(milliseconds: -8);
     // Show first: a hidden window schedules no frames, so waiting for one before showing would wait forever
     await windowManager.show();
     await libraryKey.currentState?.openDraw(path);
@@ -115,6 +119,7 @@ class AppController with TrayListener, WindowListener {
     var kept = false;
     if (shot != null) kept = await editorKey.currentState?.finishDraw(shot) ?? false;
     drawing = false;
+    GestureBinding.instance.resamplingEnabled = false;
     libraryKey.currentState?.closeDraw();
     return kept;
   }

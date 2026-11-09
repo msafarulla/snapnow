@@ -113,6 +113,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   Offset? _cropGrab; // last pointer position while moving the rect
   int? _cropHover; // handle under the cursor (0–7), -1 inside the rect, null otherwise — drives the resize cursor
   List<Offset>? _penPoints;
+  /// Bumped on every pen sample: only the preview layer repaints, not the whole editor (toolbar, panel, canvas).
+  final _liveTick = ValueNotifier<int>(0);
   List<Offset>? _trail; // the path dragged so far, when the Arrow / Line tool follows the drag
 
   /// Curve: new arrows and lines follow the path you drag instead of going straight (remembered).
@@ -795,7 +797,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     if (!_imageRect.inflate(24 / _viewScale).contains(p)) return; // far outside the image: nothing to draw
     if (_tool == Tool.text) { _addText(_clamp(p)); return; }
     if (_tool == Tool.step) { _addStep(_clamp(p)); return; }
-    if (_tool == Tool.pen) { _penPoints = [_clamp(p)]; return; }
+    if (_tool == Tool.pen) { setState(() => _penPoints = [_clamp(p)]); return; } // one rebuild hands the preview the list; the moves only repaint it
     _createStart = _clamp(p); _createCurrent = _createStart;
     _trail = (_followDrag || BuildUpGif.fourier) && (_tool == Tool.arrow || _tool == Tool.line) ? [_createStart!] : null;
   }
@@ -842,7 +844,13 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       _lastPoint = p;
       _replace(next, snapshot: false);
     } else if (_penPoints != null) {
-      if ((_penPoints!.last - _clamp(p)).distance >= 1) setState(() => _penPoints!.add(_clamp(p)));
+      // Each sample is eased 65% of the way from the last point to the pointer: hand tremor and event jitter round off
+      // (the stroke trails the tip by a fraction of one step; the exact end point is added on release)
+      final q = _clamp(p), last = _penPoints!.last;
+      if ((last - q).distance >= 1) {
+        _penPoints!.add(_penPoints!.length < 2 ? q : Offset.lerp(last, q, 0.65)!);
+        _liveTick.value++;
+      }
     } else if (_createStart != null) {
       var q = _clamp(p);
       // Square and circle (or Shift) keep the sides equal
@@ -880,6 +888,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       return;
     }
     if (_penPoints != null) {
+      _penPoints!.add(_clamp(p)); // the stroke ends exactly where the pointer let go
       final pts = _penPoints!; _penPoints = null;
       if (pts.length > 1) {
         final a = Annotation(id: _nextId++, scale: _density, shape: PenShape(pts), color: _color, size: _size, arrowStyle: _styleFor(StyleKind.shape));
@@ -995,7 +1004,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       case Tool.arrow || Tool.line when BuildUpGif.fourier && _fourierShape(a, b) != null:
         shape = _fourierShape(a, b);
       case Tool.arrow || Tool.line:
-        final f = _follow(a, b);
+        final f = _follow(a, b, fresh: true);
         if (f != null) {
           shape = _tool == Tool.arrow
               ? ArrowShape(f.from, f.to, points: f.points, tangents: f.tangents)
@@ -2669,7 +2678,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                         origin: origin,
                         tool: _tool, color: _color, size: _size, scale: scale, scaleY: scaleY,
                         style: kind == null ? ArrowStyle.arrow : _styleFor(kind),
-                        createStart: _createStart, createCurrent: _createCurrent, penPoints: _penPoints,
+                        createStart: _createStart, createCurrent: _createCurrent, penPoints: _penPoints, tick: _liveTick,
                         follow: _createStart == null || _createCurrent == null ? null : _follow(_createStart!, _createCurrent!),
                         canvasChrome: _showsCanvasHandles || _canvasDrag != null,
                         ants: _copied ? _ants : null,
@@ -2795,9 +2804,25 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   /// a true circular arc when the drag is close to one (anything curved one way), otherwise a smooth
   /// least-squares curve through the drag (smoothed first, each point averaged with its neighbours) with as
   /// few bends as keep it within a few points of the drag, at most 4; hand wobble is fitted away.
-  ({Offset from, Offset to, List<Offset> points, List<Offset?> tangents})? _follow(Offset start, Offset end) {
+  ({Offset from, Offset to, List<Offset> points, List<Offset?> tangents})? _follow(Offset start, Offset end, {bool fresh = false}) {
     final t = _trail;
     if (t == null || t.length < 3) return null;
+    // The least-squares fit costs more than a frame on a long drag: while dragging it is redone at most every 50 ms and
+    // in between the last fit keeps its bends and only its end follows the pointer. The release always fits fresh.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cached = _followCache;
+    if (!fresh && cached != null && cached.start == start && now - cached.at < 50) {
+      final f = cached.value;
+      return f == null ? null : (from: f.from, to: end, points: f.points, tangents: f.tangents);
+    }
+    final value = _followFit(start, end, t);
+    _followCache = (start: start, at: now, value: value);
+    return value;
+  }
+
+  ({Offset start, int at, ({Offset from, Offset to, List<Offset> points, List<Offset?> tangents})? value})? _followCache;
+
+  ({Offset from, Offset to, List<Offset> points, List<Offset?> tangents})? _followFit(Offset start, Offset end, List<Offset> t) {
     final pts = CurveFit.smoothed([...t, end]);
     // Nearly straight stays straight
     final chord = pts.last - pts.first, chordLen = chord.distance;
@@ -3470,6 +3495,7 @@ class _PreviewPainter extends CustomPainter {
   final double? scaleY; // vertical scale (defaults to `scale`); differs after a non-proportional resize
   final Offset? createStart, createCurrent;
   final List<Offset>? penPoints;
+  final ValueNotifier<int>? tick; // pen samples repaint this layer alone
   final ({Offset from, Offset to, List<Offset> points, List<Offset?> tangents})? follow; // Curve: the path so far
   final bool canvasChrome;
   final ValueNotifier<double>? ants;
@@ -3484,10 +3510,10 @@ class _PreviewPainter extends CustomPainter {
   final Rect? cropRect; // the pending Crop-tool region (image coords): dotted outline + draggable handles
 
   _PreviewPainter({required this.base, required this.origin, required this.tool, required this.color, required this.size,
-      required this.scale, this.scaleY, required this.style, this.createStart, this.createCurrent, this.penPoints, this.follow,
+      required this.scale, this.scaleY, required this.style, this.createStart, this.createCurrent, this.penPoints, this.tick, this.follow,
       this.canvasChrome = false, this.ants, required this.march, this.canvasResize, this.boundsOfSelection, this.groupBoxes,
       this.guides = const [], this.fourier = false, this.envelope = false, this.trail, this.cropRect})
-      : super(repaint: Listenable.merge([ants, march]));
+      : super(repaint: Listenable.merge([ants, march, tick]));
 
   static const _accent = Color(0xFF2F7CF6);
 
