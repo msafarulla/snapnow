@@ -9,6 +9,8 @@ class Native {
   static void Function(String path)? onOpenEditor;
   static void Function(String path)? onOpenDraw;
   static void Function()? onCloseDraw;
+  /// Draw mode: how bright the screen is behind the toolbar and the panel (0 black ... 1 white), about every 0.7 s.
+  static void Function(List<double> luma)? onGlassLuma;
   static void Function()? onShowLibrary;
   static void Function()? onCapturesChanged;
   static void Function(String choice)? onAppearanceChanged;
@@ -20,6 +22,7 @@ class Native {
         case 'openEditor': onOpenEditor?.call(call.arguments as String);
         case 'openDraw': onOpenDraw?.call(call.arguments as String);
         case 'closeDraw': onCloseDraw?.call();
+        case 'glassLuma': onGlassLuma?.call((call.arguments as List).map((e) => (e as num).toDouble()).toList());
         case 'showLibrary': onShowLibrary?.call();
         case 'capturesChanged': onCapturesChanged?.call();
         case 'colorPicked': onColorPicked?.call(call.arguments as int);
@@ -35,7 +38,8 @@ class Native {
   static Future<void> toast(String message, {String symbol = 'checkmark.circle.fill'}) =>
       _call('toast', {'message': message, 'symbol': symbol});
   /// Draw mode: the rectangles (x, y, w, h, radius in window points) of the floating cards, which the window frosts.
-  static Future<void> glassRects(List<List<double>> rects, {required bool dark}) => _call('glassRects', {'rects': rects, 'dark': dark});
+  static Future<void> glassRects(List<List<double>> rects, {required bool dark, required bool frost}) =>
+      _call('glassRects', {'rects': rects, 'dark': dark, 'frost': frost});
   static Future<List<int>?> toolbarTools() async => (await _call<List>('toolbarTools'))?.cast<int>();
 
   static Future<Uint8List?> thumbnail(String path, {double size = 180}) =>

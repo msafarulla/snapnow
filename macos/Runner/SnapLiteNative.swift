@@ -45,7 +45,8 @@ final class SnapLiteNative {
     case "glassRects":
       let rects = (args["rects"] as? [[Double]]) ?? []
       LiveDraw.shared.setGlass(rects: rects.map { CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) },
-                               radius: CGFloat(rects.first?[4] ?? 14), dark: args["dark"] as? Bool ?? true)
+                               radius: CGFloat(rects.first?[4] ?? 14), dark: args["dark"] as? Bool ?? true,
+                               useFrost: args["frost"] as? Bool ?? true)
       result(nil)
     case "copyText":
       Shell.copyText(args["text"] as? String ?? "")

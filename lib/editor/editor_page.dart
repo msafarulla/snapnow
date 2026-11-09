@@ -145,7 +145,18 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   ShapeKind _shapeKind = ShapeKind.rectangle;
 
   @override
+  void didUpdateWidget(EditorPage old) {
+    super.didUpdateWidget(old);
+    // Draw mode moves the same State under a different parent (GlobalKey), so it arrives and leaves here, not in initState/dispose
+    if (old.overlay != widget.overlay) {
+      _ToolButton.glass = widget.overlay;
+      if (!widget.overlay) { _toolbarBright = null; _panelBright = null; }
+    }
+  }
+
+  @override
   void initState() {
+    Native.onGlassLuma = _onGlassLuma; // draw mode: icon colours follow the screen behind each strip (the editor keeps its State when draw mode swaps its parent, so this is set for good)
     super.initState();
     _makeBlankCanvas(1200, 800);
     _loadPrefs();
@@ -575,6 +586,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   @override
   void dispose() {
     if (widget.overlay) _ToolButton.glass = false; // the glass chrome goes with draw mode
+    if (Native.onGlassLuma == _onGlassLuma) Native.onGlassLuma = null;
     _antsTimer?.cancel();
     _marchTimer?.cancel();
     _playTimer?.cancel();
@@ -2412,13 +2424,13 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       body: LayoutBuilder(builder: (context, c) => Stack(key: _chromeKey, children: [
         Positioned.fill(child: state == null ? const Center(child: CircularProgressIndicator()) : _canvasArea(state)),
         // The toolbar card, centred in its dock; dimmed while its grip is being dragged
-        dock(_toolbarLeft, Opacity(opacity: dragging ? 0.35 : 1, child: Center(child: KeyedSubtree(key: _glassToolbarKey, child: _toolbar())))),
+        dock(_toolbarLeft, Opacity(opacity: dragging ? 0.35 : 1, child: Center(child: KeyedSubtree(key: _glassToolbarKey, child: _tone(_toolbarBright, _toolbar()))))),
         if (_inspectorShown)
           Positioned(
             top: m,
             right: m,
             bottom: m + widget.chromeInsets.bottom,
-            child: KeyedSubtree(key: _glassPanelKey, child: PropertiesPanel(host: this, onClose: _toggleInspector)),
+            child: KeyedSubtree(key: _glassPanelKey, child: _tone(_panelBright, PropertiesPanel(host: this, onClose: _toggleInspector))),
           ),
         if (_toolbarDragAt case final at?) ...[
           // The dock the drop would land in, lit up
@@ -2455,6 +2467,25 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   // ---- Draw mode glass ----
   final _glassToolbarKey = GlobalKey(), _glassPanelKey = GlobalKey();
   int _glassLevel = 100; // Settings › Draw mode › Glass, in percent (read when draw mode opens)
+  bool? _toolbarBright, _panelBright; // is the screen behind the strip bright? (null until the first sample)
+
+  void _onGlassLuma(List<double> l) {
+    // Hysteresis: flips to dark icons above 0.62 and back to light below 0.45, so a mid-grey screen does not flicker
+    bool next(bool? cur, double v) => cur == null ? v > 0.55 : (cur ? v > 0.45 : v > 0.62);
+    final t = l.isNotEmpty ? next(_toolbarBright, l[0]) : null;
+    final p = l.length > 1 ? next(_panelBright, l[1]) : null;
+    if (mounted && (t != _toolbarBright || p != _panelBright)) setState(() { _toolbarBright = t; _panelBright = p ?? _panelBright; });
+  }
+
+  /// Icons and text over [bright] screen content are dark, over dark content light (full strength either way).
+  Widget _tone(bool? bright, Widget child) {
+    if (bright == null) return child;
+    return Builder(builder: (ctx) {
+      final theme = Theme.of(ctx);
+      final fg = bright ? const Color(0xFF0E1116) : const Color(0xFFF5F7FA);
+      return Theme(data: theme.copyWith(colorScheme: theme.colorScheme.copyWith(onSurface: fg, onSurfaceVariant: fg)), child: child);
+    });
+  }
 
   /// The cards in draw mode are clear glass: their fill is a light tint (theme-coloured), and the blur behind them
   /// is a native frosted layer the window draws under Flutter, masked to these rectangles (the desktop is not
@@ -2489,8 +2520,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final o = box.localToGlobal(Offset.zero);
       rects.add([o.dx, o.dy, box.size.width, box.size.height, SnapChrome.radius]);
     }
-    // 100% is clear glass (nothing behind the cards) and 0% is solid (no frost needed); the steps between are frosted
-    Native.glassRects(_glassLevel == 0 || _glassLevel == 100 ? const [] : rects, dark: dark);
+    // 100% is clear glass (rects still go for the brightness sampling, but no frost); 0% is solid; the steps between are frosted
+    Native.glassRects(_glassLevel == 0 ? const [] : rects, dark: dark, frost: _glassLevel != 100);
   }
 
   /// The canvas: the image centred with a soft shadow, and one full-size input/paint layer over the whole
@@ -3221,7 +3252,7 @@ class _ToolButtonState extends State<_ToolButton> {
     final glass = _ToolButton.glass; // draw mode: icons and labels lead, at full strength with a soft shadow
     final fg = !enabled ? s.onSurface.withValues(alpha: glass ? 0.4 : 0.28)
         : widget.active || widget.primary ? s.primary : (_hover || glass) ? s.onSurface : s.onSurfaceVariant;
-    final shadows = glass ? const [Shadow(color: Color(0x66000000), blurRadius: 3, offset: Offset(0, 1))] : null;
+    final shadows = glass ? [Shadow(color: s.onSurface.computeLuminance() < 0.5 ? const Color(0x80FFFFFF) : const Color(0x80000000), blurRadius: 3, offset: const Offset(0, 1))] : null;
     final button = MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),

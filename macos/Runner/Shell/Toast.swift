@@ -1,5 +1,6 @@
 import AppKit
 import FlutterMacOS
+import ScreenCaptureKit
 
 /// A short notice near the bottom of the screen that fades on its own. It can carry a preview of
 /// copied text (`detail`); it stays while the mouse is over it and never takes focus.
@@ -519,6 +520,7 @@ final class LiveDraw {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         session = (url, (attrs?[.modificationDate] as? Date) ?? Date(), (attrs?[.size] as? Int) ?? 0)
         active = true
+        startSampling()
         NSApp.activate()
         expand()                          // a clear, display-sized window BEFORE the editor shows, so it never flashes as a normal window
         editorWindow?.makeKeyAndOrderFront(nil)
@@ -549,8 +551,10 @@ final class LiveDraw {
     private var frostWindow: NSWindow?
     private var frost: NSVisualEffectView?
 
-    func setGlass(rects: [CGRect], radius: CGFloat, dark: Bool) {
+    func setGlass(rects: [CGRect], radius: CGFloat, dark: Bool, useFrost: Bool) {
         guard active, let w = editorWindow else { return }
+        lastRects = rects
+        guard useFrost else { removeFrost(); return }
         if frostWindow == nil {
             let fw = NSWindow(contentRect: w.frame, styleMask: .borderless, backing: .buffered, defer: false)
             fw.isOpaque = false
@@ -613,6 +617,68 @@ final class LiveDraw {
     /// ⌘W / the editor's close while in draw mode.
     func endFromEditor() { if active { leave() } }
 
+    // ---- Adaptive icon colour: how bright is the live screen behind each strip? ----
+    private var lastRects: [CGRect] = []
+    private var sampling: Task<Void, Never>?
+
+    private func startSampling() {
+        sampling?.cancel()
+        sampling = Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled, self.active {
+                await self.sampleOnce()
+                try? await Task.sleep(nanoseconds: 700_000_000)
+            }
+        }
+    }
+
+    /// The screen without SnapNow's own windows (so the overlay does not measure itself), averaged under each reported strip.
+    private func log(_ m: String) {
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("SnapLite/trace.log")
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write("\(Date()) live-draw \(m)\n".data(using: .utf8)!); try? h.close() }
+    }
+
+    @MainActor private func sampleOnce() async {
+        guard active, !lastRects.isEmpty, let w = editorWindow, let screen = w.screen ?? NSScreen.main,
+              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+            log("sample skipped: active=\(active) rects=\(lastRects.count)"); return
+        }
+        let shareable: SCShareableContent
+        do { shareable = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) }
+        catch { log("sample: SCShareableContent failed \(error)"); return }
+        let content = shareable
+        guard let display = content.displays.first(where: { $0.displayID == id }) else { log("sample: no display \(id)"); return }
+        let mine = content.windows.filter { $0.owningApplication?.processID == ProcessInfo.processInfo.processIdentifier }
+        let config = SCStreamConfiguration()
+        config.width = max(1, Int(screen.frame.width / 2))
+        config.height = max(1, Int(screen.frame.height / 2))
+        config.showsCursor = false
+        let image: CGImage
+        do { image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: mine), configuration: config) }
+        catch { log("sample: capture failed \(error)"); return }
+        let s = CGFloat(image.width) / screen.frame.width
+        let lumas = lastRects.map { r -> Double in
+            let crop = CGRect(x: r.minX * s, y: r.minY * s, width: r.width * s, height: r.height * s).integral
+            guard let part = image.cropping(to: crop) else { return 0.5 }
+            return LiveDraw.luminance(of: part)
+        }
+        SnapLiteNative.shared?.invoke("glassLuma", lumas)
+    }
+
+    /// Mean relative brightness of an image, 0 (black) ... 1 (white).
+    private static func luminance(of image: CGImage) -> Double {
+        let n = 8
+        var px = [UInt8](repeating: 0, count: n * n * 4)
+        guard let ctx = CGContext(data: &px, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return 0.5 }
+        ctx.interpolationQuality = .medium
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: n, height: n))
+        var sum = 0.0
+        for i in stride(from: 0, to: px.count, by: 4) {
+            sum += 0.2126 * Double(px[i]) + 0.7152 * Double(px[i + 1]) + 0.0722 * Double(px[i + 2])
+        }
+        return sum / Double(n * n) / 255
+    }
+
     private func removeFrost() {
         if let fw = frostWindow { editorWindow?.removeChildWindow(fw); fw.orderOut(nil) }
         frostWindow = nil; frost = nil
@@ -620,6 +686,7 @@ final class LiveDraw {
 
     private func leave() {
         active = false
+        sampling?.cancel(); lastRects = []
         SnapLiteNative.shared?.invoke("closeDraw")      // the editor goes back to normal, discarding the drawing
         removeFrost()
         restoreWindow()
