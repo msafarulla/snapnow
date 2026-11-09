@@ -2466,9 +2466,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     final tint = (100 - _glassLevel) / 100.0;            // 0 = clear glass ... 1 = solid card
     Color mix(Color c, double clear, double solid) => c.withValues(alpha: clear + (solid - clear) * tint);
     final glass = SnapChrome.of(context).copyWith(
-      card: mix(dark ? const Color(0xFF14161C) : const Color(0xFFFFFFFF), 0.04, 0.96),
+      card: mix(dark ? const Color(0xFF14161C) : const Color(0xFFFFFFFF), 0.0, 0.96),
       border: dark ? Color.fromARGB((0x33 + (0x40 * tint)).round(), 255, 255, 255) : Color.fromARGB((0x80 - (0x50 * tint)).round(), 255, 255, 255),
-      shadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 18, offset: Offset(0, 6))],
+      // a drop shadow shows through a clear card as a grey wash, so fully clear glass has none
+      shadow: tint < 0.12 ? const [] : const [BoxShadow(color: Color(0x33000000), blurRadius: 18, offset: Offset(0, 6))],
       control: mix(dark ? const Color(0xFFFFFFFF) : const Color(0xFFFFFFFF), 0.12, dark ? 0.10 : 0.9),
       controlBorder: dark ? const Color(0x33FFFFFF) : const Color(0x33000000),
       raised: mix(const Color(0xFFFFFFFF), 0.25, dark ? 0.18 : 1.0),
@@ -2488,7 +2489,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final o = box.localToGlobal(Offset.zero);
       rects.add([o.dx, o.dy, box.size.width, box.size.height, SnapChrome.radius]);
     }
-    Native.glassRects(_glassLevel == 0 ? const [] : rects, dark: dark); // solid cards need no frost behind them
+    // 100% is clear glass (nothing behind the cards) and 0% is solid (no frost needed); the steps between are frosted
+    Native.glassRects(_glassLevel == 0 || _glassLevel == 100 ? const [] : rects, dark: dark);
   }
 
   /// The canvas: the image centred with a soft shadow, and one full-size input/paint layer over the whole
