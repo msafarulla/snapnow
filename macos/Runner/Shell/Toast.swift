@@ -551,9 +551,14 @@ final class LiveDraw {
     private var frostWindow: NSWindow?
     private var frost: NSVisualEffectView?
 
+    private var glassKey = ""
+
     func setGlass(rects: [CGRect], radius: CGFloat, dark: Bool, useFrost: Bool) {
         guard active, let w = editorWindow else { return }
         lastRects = rects
+        let key = "\(rects)|\(radius)|\(dark)|\(useFrost)|\(w.frame)"
+        if key == glassKey { return }                 // nothing changed: skip rebuilding the display-sized mask
+        glassKey = key
         guard useFrost else { removeFrost(); return }
         if frostWindow == nil {
             let fw = NSWindow(contentRect: w.frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -637,29 +642,31 @@ final class LiveDraw {
         if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write("\(Date()) live-draw \(m)\n".data(using: .utf8)!); try? h.close() }
     }
 
+    private var cachedContent: (at: Date, content: SCShareableContent)?
+
     @MainActor private func sampleOnce() async {
         guard active, !lastRects.isEmpty, let w = editorWindow, let screen = w.screen ?? NSScreen.main,
               let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
             log("sample skipped: active=\(active) rects=\(lastRects.count)"); return
         }
-        let shareable: SCShareableContent
-        do { shareable = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) }
-        catch { log("sample: SCShareableContent failed \(error)"); return }
-        let content = shareable
-        guard let display = content.displays.first(where: { $0.displayID == id }) else { log("sample: no display \(id)"); return }
+        // The window list is the costly part: reuse it for a few seconds (SnapNow's own windows do not change while drawing)
+        if cachedContent == nil || Date().timeIntervalSince(cachedContent!.at) > 4 {
+            do { cachedContent = (Date(), try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)) }
+            catch { log("sample: SCShareableContent failed \(error)"); return }
+        }
+        guard let content = cachedContent?.content, let display = content.displays.first(where: { $0.displayID == id }) else { log("sample: no display \(id)"); return }
         let mine = content.windows.filter { $0.owningApplication?.processID == ProcessInfo.processInfo.processIdentifier }
-        let config = SCStreamConfiguration()
-        config.width = max(1, Int(screen.frame.width / 2))
-        config.height = max(1, Int(screen.frame.height / 2))
-        config.showsCursor = false
-        let image: CGImage
-        do { image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: mine), configuration: config) }
-        catch { log("sample: capture failed \(error)"); return }
-        let s = CGFloat(image.width) / screen.frame.width
-        let lumas = lastRects.map { r -> Double in
-            let crop = CGRect(x: r.minX * s, y: r.minY * s, width: r.width * s, height: r.height * s).integral
-            guard let part = image.cropping(to: crop) else { return 0.5 }
-            return LiveDraw.luminance(of: part)
+        let filter = SCContentFilter(display: display, excludingWindows: mine)
+        // Only the strips, as tiny images: on a 5K display a whole-screen capture every tick was the expensive part
+        var lumas: [Double] = []
+        for r in lastRects {
+            let config = SCStreamConfiguration()
+            config.sourceRect = r                                   // display points, origin top-left
+            config.width = max(2, Int(r.width / 6))
+            config.height = max(2, Int(r.height / 6))
+            config.showsCursor = false
+            guard let part = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) else { lumas.append(0.5); continue }
+            lumas.append(LiveDraw.luminance(of: part))
         }
         SnapLiteNative.shared?.invoke("glassLuma", lumas)
     }
@@ -680,6 +687,7 @@ final class LiveDraw {
     }
 
     private func removeFrost() {
+        glassKey = ""
         if let fw = frostWindow { editorWindow?.removeChildWindow(fw); fw.orderOut(nil) }
         frostWindow = nil; frost = nil
     }

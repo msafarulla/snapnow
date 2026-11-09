@@ -25,11 +25,14 @@ class CanvasPainter extends CustomPainter {
   final bool epicycles;
   /// For the build-up GIF: lines, strokes and outlines appear as the envelope of their tangent lines (string art).
   final bool envelope;
+  /// Draw mode: the base picture is fully transparent (the glass), so it is not drawn at all. On a 5K display that image is
+  /// ~15 megapixels, redrawn (mipmapped) on every repaint for nothing.
+  final bool clearBase;
 
   /// [animate] makes the painter repaint on every [march] tick: only wanted when a committed annotation
   /// actually marches, so the editor's cached picture layer isn't re-rasterised 25× a second for nothing.
   CanvasPainter({required this.state, required this.selectionId, required this.scale, this.scaleY, this.hiddenTextId,
-      this.progress, this.march, this.epicycles = false, this.envelope = false, bool animate = false})
+      this.progress, this.march, this.epicycles = false, this.envelope = false, this.clearBase = false, bool animate = false})
       : super(repaint: animate ? march : null);
 
   double get _sy => scaleY ?? scale; // vertical scale, == scale unless a non-proportional editor resize set it
@@ -62,9 +65,11 @@ class CanvasPainter extends CustomPainter {
     canvas.scale(scale, _sy); // draw everything in image coordinates (per-axis after a non-proportional resize)
     final img = state.image;
     final imageRect = Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble());
-    canvas.drawRect(imageRect, Paint()..color = state.background); // canvas colour behind the image
-    // Smoothed when drawn smaller (GIFs at point size, zoomed-out editor): unfiltered drops pixels, jagged text
-    canvas.drawImage(img, Offset.zero, Paint()..filterQuality = FilterQuality.medium);
+    if (!clearBase) {
+      canvas.drawRect(imageRect, Paint()..color = state.background); // canvas colour behind the image
+      // Smoothed when drawn smaller (GIFs at point size, zoomed-out editor): unfiltered drops pixels, jagged text
+      canvas.drawImage(img, Offset.zero, Paint()..filterQuality = FilterQuality.medium);
+    }
 
     // Blur patches first, then spotlight dimming, then the rest in order.
     final spotlights = <(Rect, double)>[];

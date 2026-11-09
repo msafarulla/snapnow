@@ -151,6 +151,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     super.didUpdateWidget(old);
     // Draw mode moves the same State under a different parent (GlobalKey), so it arrives and leaves here, not in initState/dispose
     if (old.overlay != widget.overlay) {
+      _lastGlassKey = null; // a new draw session starts with no frost layer on the native side
       _ToolButton.glass = widget.overlay;
       if (!widget.overlay) { _toolbarBright = null; _panelBright = null; }
     }
@@ -2551,6 +2552,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     return Theme(data: theme.copyWith(extensions: [glass], colorScheme: scheme), child: child);
   }
 
+  String? _lastGlassKey;
+
   void _reportGlass(bool dark) {
     if (!mounted) return;
     final rects = <List<double>>[];
@@ -2560,6 +2563,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final o = box.localToGlobal(Offset.zero);
       rects.add([o.dx, o.dy, box.size.width, box.size.height, SnapChrome.radius]);
     }
+    // Only when something changed: every drag frame rebuilds the editor, and the native side redraws a display-sized frost mask per call
+    final key = '${rects.map((r) => r.map((v) => v.round()).join(',')).join(';')}|$dark|$_glassLevel';
+    if (key == _lastGlassKey) return;
+    _lastGlassKey = key;
     // 100% is clear glass (rects still go for the brightness sampling, but no frost); 0% is solid; the steps between are frosted
     Native.glassRects(_glassLevel == 0 ? const [] : rects, dark: dark, frost: _glassLevel != 100);
   }
@@ -2663,7 +2670,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                         left: origin.dx, top: origin.dy, width: fitted.width, height: fitted.height,
                         child: ClipRect(child: RepaintBoundary(child: CustomPaint(
                           isComplex: true,
-                          painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY,
+                          painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY, clearBase: widget.overlay,
                               hiddenTextId: _textEdit?.id, march: _march, epicycles: _playId != null && BuildUpGif.fourier,
                               envelope: _playId != null && BuildUpGif.envelope,
                               animate: state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches),
