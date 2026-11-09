@@ -22,6 +22,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let openEditorItem = NSMenuItem(title: "Open in Editor", action: #selector(toggleOpenEditor), keyEquivalent: "")
     private let copyImageItem = NSMenuItem(title: "Copy to Clipboard", action: #selector(toggleCopyImage), keyEquivalent: "")
     private let microphoneItem = NSMenuItem(title: "Record Microphone", action: #selector(toggleMicrophone), keyEquivalent: "")
+    private let altHandItem = NSMenuItem(title: "Option+Click Hand", action: #selector(toggleAltHand), keyEquivalent: "")
     private let recorder = Recorder()
     private var recordingTimer: Timer?
     private var countdownTimer: Timer?
@@ -40,7 +41,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private var busy = false   // a capture, countdown or region pick is in progress
 
     func start() {
-        defaults.register(defaults: [Prefs.openEditor: true, Prefs.copyImage: false, Prefs.microphone: false])
+        defaults.register(defaults: [Prefs.openEditor: true, Prefs.copyImage: false, Prefs.microphone: false, Prefs.altClickHand: true])
+        AltClickHand.shared.start()
         NSApp.appearance = Theme.appearance
         // In "Match System", follow light/dark switches while running
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
@@ -132,7 +134,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             hotkeysItem.submenu?.addItem(entry)
         }
         menu.addItem(hotkeysItem)
-        for entry in [microphoneItem, loginItem] {
+        for entry in [microphoneItem, altHandItem, loginItem] {
             entry.target = self
             menu.addItem(entry)
         }
@@ -238,6 +240,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         openEditorItem.state = defaults.bool(forKey: Prefs.openEditor) ? .on : .off
         copyImageItem.state = defaults.bool(forKey: Prefs.copyImage) ? .on : .off
         microphoneItem.state = defaults.bool(forKey: Prefs.microphone) ? .on : .off
+        altHandItem.state = defaults.bool(forKey: Prefs.altClickHand) ? .on : .off
 
         recentMenu.removeAllItems()
         let files = (try? FileManager.default.contentsOfDirectory(at: Capture.folder, includingPropertiesForKeys: [.contentModificationDateKey],
@@ -645,6 +648,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     @objc private func toggleOpenEditor() { defaults.set(!defaults.bool(forKey: Prefs.openEditor), forKey: Prefs.openEditor) }
     @objc private func toggleCopyImage() { defaults.set(!defaults.bool(forKey: Prefs.copyImage), forKey: Prefs.copyImage) }
+    @objc private func toggleAltHand() { defaults.set(!defaults.bool(forKey: Prefs.altClickHand), forKey: Prefs.altClickHand) }
+
     @objc private func toggleMicrophone() { defaults.set(!defaults.bool(forKey: Prefs.microphone), forKey: Prefs.microphone) }
 
     @objc private func toggleLogin() {

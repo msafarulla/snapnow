@@ -7,6 +7,8 @@ enum Prefs {
     static let openEditor = "openEditorAfterCapture"
     static let copyImage = "copyAfterCapture"
     static let microphone = "recordMicrophone"
+    /// Option+click anywhere shows the pointing hand (same as the WMOS automation). Default on.
+    static let altClickHand = "altClickHand"
     /// Format Save As starts on; empty means the last one used.
     static let saveAsFormat = "saveAs.defaultFormat"
     /// Animated GIF frames a second ("15", "25" or "50"); the editor reads it each time it makes a GIF.
