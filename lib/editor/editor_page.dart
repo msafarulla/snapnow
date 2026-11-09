@@ -2479,11 +2479,24 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   /// Icons and text over [bright] screen content are dark, over dark content light (full strength either way).
   Widget _tone(bool? bright, Widget child) {
-    if (bright == null) return child;
     return Builder(builder: (ctx) {
       final theme = Theme.of(ctx);
-      final fg = bright ? const Color(0xFF0E1116) : const Color(0xFFF5F7FA);
-      return Theme(data: theme.copyWith(colorScheme: theme.colorScheme.copyWith(onSurface: fg, onSurfaceVariant: fg)), child: child);
+      final light = bright ?? theme.brightness == Brightness.light; // until the first sample, follow the theme
+      final fg = light ? const Color(0xFF0E1116) : const Color(0xFFF5F7FA);
+      final shadow = [Shadow(color: light ? const Color(0x80FFFFFF) : const Color(0x80000000), blurRadius: 2.5, offset: const Offset(0, 1))];
+      // Material text takes its colour from the TextTheme (built when the theme was), not from the ColorScheme, so
+      // the panel's labels, values and icons are all set here: full strength, a little bolder, with a soft shadow
+      return Theme(
+        data: theme.copyWith(
+          colorScheme: theme.colorScheme.copyWith(onSurface: fg, onSurfaceVariant: fg),
+          textTheme: theme.textTheme.apply(bodyColor: fg, displayColor: fg),
+          iconTheme: theme.iconTheme.copyWith(color: fg, shadows: shadow),
+        ),
+        child: DefaultTextStyle.merge(
+          style: TextStyle(color: fg, shadows: shadow, fontWeight: FontWeight.w600),
+          child: IconTheme.merge(data: IconThemeData(color: fg, shadows: shadow), child: child),
+        ),
+      );
     });
   }
 
