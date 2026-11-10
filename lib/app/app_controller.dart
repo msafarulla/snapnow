@@ -105,11 +105,11 @@ class AppController with TrayListener, WindowListener {
     // Pointer events aligned to the display's frames and interpolated between samples: the stroke follows the hand evenly
     GestureBinding.instance.resamplingEnabled = true;
     GestureBinding.instance.samplingOffset = const Duration(milliseconds: -8);
-    // Show first: a hidden window schedules no frames, so waiting for one before showing would wait forever
-    await windowManager.show();
+    // The native side has already put the window on screen (on the current Space) and activated SnapNow. A show/focus
+    // from here would order it front again and could pull macOS to another Space; only a hidden window still needs it
+    // (a hidden window schedules no frames, so waiting for one before showing would wait forever).
+    if (!await windowManager.isVisible()) await windowManager.show();
     await libraryKey.currentState?.openDraw(path);
-    await windowManager.focus();
-    await Native.activate();
   }
 
   bool drawing = false;

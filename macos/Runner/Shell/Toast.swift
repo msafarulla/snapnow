@@ -475,7 +475,12 @@ final class LiveDraw {
     private var downAt: Date?
     private var lastTap: Date?
     private var dirty = false
-    private var saved: (frame: NSRect, level: NSWindow.Level, mask: NSWindow.StyleMask, shadow: Bool, opaque: Bool, color: NSColor, flutter: NSColor?)?
+    private var saved: (frame: NSRect, level: NSWindow.Level, mask: NSWindow.StyleMask, shadow: Bool, opaque: Bool, color: NSColor, flutter: NSColor?,
+                    spaces: NSWindow.CollectionBehavior)?
+    /// The display draw mode opened on, fixed for the whole session (the re-checks after 0.3/0.8 s must not follow the mouse).
+    private var drawScreen: NSScreen?
+    /// The app you were in when draw mode opened: it gets the focus back when the glass is lifted.
+    private var previousApp: NSRunningApplication?
     private var session: (url: URL, modified: Date, size: Int)?
     private let promptedKey = "liveDraw.promptedAccessibility"
 
@@ -531,21 +536,43 @@ final class LiveDraw {
     }
 
     private func enter() {
-        let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
-        guard let screen, let url = glassCanvas(for: screen) else { return }
+        guard let screen = LiveDraw.targetScreen(), let url = glassCanvas(for: screen) else { return }
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         session = (url, (attrs?[.modificationDate] as? Date) ?? Date(), (attrs?[.size] as? Int) ?? 0)
+        let front = NSWorkspace.shared.frontmostApplication
+        previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
+        drawScreen = screen
         active = true
         startSampling()
-        NSApp.activate()
-        expand()                          // a clear, display-sized window BEFORE the editor shows, so it never flashes as a normal window
+        // The window is put on screen HERE, on the current Space, before SnapNow is activated: activating first lets macOS
+        // switch to the Space the editor window last belonged to (where the previous session was opened).
+        expand()                          // clear, display-sized, on every Space for the session
         editorWindow?.alphaValue = 0
-        editorWindow?.makeKeyAndOrderFront(nil)
+        editorWindow?.orderFrontRegardless()
+        NSApp.activate()
+        editorWindow?.makeKey()
         NSAnimationContext.runAnimationGroup { c in c.duration = 0.16; self.editorWindow?.animator().alphaValue = 1 }   // a short fade, not a pop
         SnapLiteNative.shared?.invoke("openDraw", url.path)
         for delay in [0.3, 0.8] {         // once more after Flutter shows it, in case the window manager resized it
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in if self?.active == true { self?.expand() } }
         }
+    }
+
+    /// Where the glass goes: the display of the window you are working in (the frontmost app's frontmost window),
+    /// else the display under the mouse, else the main display. SnapNow's own windows never decide it.
+    static func targetScreen() -> NSScreen? {
+        let me = ProcessInfo.processInfo.processIdentifier
+        if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier, front != me {
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+            let mainHeight = NSScreen.screens.first?.frame.maxY ?? 0       // CG window bounds are top-left based on the first display
+            for w in list where (w[kCGWindowOwnerPID as String] as? pid_t) == front && (w[kCGWindowLayer as String] as? Int) == 0 {
+                guard let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b),
+                      r.width > 40, r.height > 40 else { continue }
+                let centre = NSPoint(x: r.midX, y: mainHeight - r.midY)
+                if let s = NSScreen.screens.first(where: { NSMouseInRect(centre, $0.frame, false) }) { return s }
+            }
+        }
+        return NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
     }
 
     /// A fully transparent PNG the size of the display in pixels: the "glass" the drawing goes on.
@@ -596,6 +623,7 @@ final class LiveDraw {
             fw.ignoresMouseEvents = true
             fw.isReleasedWhenClosed = false
             fw.level = w.level
+            fw.collectionBehavior = w.collectionBehavior      // same Space (and full-screen Space) as the glass
             let v = NSVisualEffectView(frame: NSRect(origin: .zero, size: w.frame.size))
             v.autoresizingMask = [.width, .height]
             v.material = .hudWindow
@@ -618,10 +646,14 @@ final class LiveDraw {
     }
 
     private func expand() {
-        guard let w = editorWindow,
-              let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main else { return }
+        guard let w = editorWindow, let screen = drawScreen ?? LiveDraw.targetScreen() else { return }
         let flutter = w.contentViewController as? FlutterViewController
-        if saved == nil { saved = (w.frame, w.level, w.styleMask, w.hasShadow, w.isOpaque, w.backgroundColor, flutter?.backgroundColor) }
+        if saved == nil {
+            saved = (w.frame, w.level, w.styleMask, w.hasShadow, w.isOpaque, w.backgroundColor, flutter?.backgroundColor, w.collectionBehavior)
+        }
+        // on every Space while the glass is up (also over a full-screen app): a window that is on the current Space can never
+        // make macOS switch Spaces when SnapNow (or window_manager on the Dart side) activates or orders it front
+        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         // borderless: no title bar, traffic lights, rounded corners or shadow; the picture is the screen itself
         (w as? MainFlutterWindow)?.drawMode = true
         w.styleMask = [.borderless]
@@ -644,6 +676,7 @@ final class LiveDraw {
         w.hasShadow = saved.shadow
         w.level = saved.level
         w.setFrame(saved.frame, display: true, animate: false)
+        w.collectionBehavior = saved.spaces
         self.saved = nil
     }
 
@@ -787,10 +820,17 @@ final class LiveDraw {
                 if let shot, !kept { try? FileManager.default.removeItem(at: shot) }
                 SnapLiteNative.shared?.invoke("capturesChanged")
                 self.removeFrost()
+                self.editorWindow?.orderOut(nil)      // out first: restoring the normal Spaces behaviour on a visible window could move it
                 self.restoreWindow()
-                self.editorWindow?.orderOut(nil)
                 self.editorWindow?.alphaValue = 1
-                NSApp.hide(nil)                       // focus goes back to the app you were showing
+                self.drawScreen = nil
+                // focus goes back to the app you were in (it is on this Space, so nothing switches); hide() as before when unknown
+                if let prev = self.previousApp, !prev.isTerminated {
+                    prev.activate(options: [])
+                } else {
+                    NSApp.hide(nil)
+                }
+                self.previousApp = nil
                 if let s = self.session {
                     let attrs = try? FileManager.default.attributesOfItem(atPath: s.url.path)
                     let unchanged = (attrs?[.modificationDate] as? Date) == s.modified && (attrs?[.size] as? Int) == s.size
