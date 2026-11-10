@@ -1468,6 +1468,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     await Native.toast('Saved');
   }
 
+  /// Whether anything is drawn on the glass right now (draw mode's closing animation flies only then).
+  bool get hasDrawMarks => _state?.annotations.isNotEmpty ?? false;
+
   /// Draw mode ended with the screen as it was behind the glass in [shotPath]: that picture goes under whatever was drawn
   /// and the whole is saved (picture + markup, so every mark stays editable) as a normal capture. False when nothing was drawn.
   Future<bool> finishDraw(String shotPath) async {

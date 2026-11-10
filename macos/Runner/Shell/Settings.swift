@@ -13,6 +13,8 @@ enum Prefs {
     static let liveDraw = "liveDrawMode"
     /// Glass level of draw mode's toolbar and panel, in percent: 100 clear frosted glass ... 0 solid. Default 100.
     static let liveDrawGlass = "liveDrawGlass"
+    /// Lifting draw mode plays a short closing animation: the markup flies into the menu bar icon (nothing drawn: a quick fade). Default on.
+    static let liveDrawCloseAnimation = "liveDrawCloseAnimation"
     static let glassChoices: [(label: String, value: Int)] = [("100% glass (clear)", 100), ("75% glass", 75), ("50% glass", 50),
                                                                  ("25% glass", 25), ("0% (solid)", 0)]
     static var glassLevel: Int {
@@ -142,6 +144,8 @@ final class SettingsWindowController: NSWindowController {
         glass.target = self
         glass.action = #selector(glassChosen(_:))
         stack.addArrangedSubview(row("Glass", glass))
+        stack.addArrangedSubview(checkbox("Closing animation (the drawing flies into the menu bar icon)", on: Prefs.onByDefault(Prefs.liveDrawCloseAnimation),
+                                          action: #selector(prefToggled(_:)), key: Prefs.liveDrawCloseAnimation))
         stack.addArrangedSubview(note("Double-tap Option lays this over your screen to draw on. 100% is clear frosted glass; lower values tint the toolbar and panel, down to solid."))
 
         // Toolbar

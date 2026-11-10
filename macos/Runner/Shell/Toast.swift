@@ -722,6 +722,18 @@ final class LiveDraw {
 
     private var leaving = false
 
+    /// Asks the editor whether anything is drawn on the glass (picks the closing animation); false after 0.25 s without an answer.
+    @MainActor private func drawHasMarks() async -> Bool {
+        guard let invoker = SnapLiteNative.shared else { return false }
+        final class Once { var done = false }
+        let once = Once()
+        return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            let finish = { (v: Bool) in if !once.done { once.done = true; c.resume(returning: v) } }
+            invoker.invoke("drawHasMarks") { finish(($0 as? Bool) ?? false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { finish(false) }
+        }
+    }
+
     /// The screen as it is behind the glass (SnapNow's own windows left out), as a normal capture file, or nil.
     @MainActor private func screenWithoutOverlay() async -> URL? {
         guard let w = editorWindow, let screen = w.screen ?? NSScreen.main,
@@ -754,6 +766,17 @@ final class LiveDraw {
         sampling?.cancel(); lastRects = []
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // Closing animation (Prefs.liveDrawCloseAnimation): a picture of the glass as it is now plays in its own click-through
+            // window, so the real window is free at once and the capture below (which leaves all SnapNow windows out) never has it.
+            if Prefs.onByDefault(Prefs.liveDrawCloseAnimation), let w = self.editorWindow {
+                async let marks = self.drawHasMarks()
+                async let picture = DrawCloseAnimation.snapshot(of: w)
+                let (drawn, image) = await (marks, picture)
+                if let image {
+                    let fly = drawn && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                    DrawCloseAnimation.play(image, frame: w.frame, level: w.level, fly: fly)
+                }
+            }
             // The glass goes at once (clear, frost off); the capture and the save then happen behind it. The screenshot leaves
             // SnapNow's own windows out anyway, so the drawing is not in it.
             self.removeFrost()
@@ -782,5 +805,118 @@ final class LiveDraw {
                 finish(false)
             }
         }
+    }
+}
+
+/// Draw mode's closing animation. Plays a still picture of the glass in a separate borderless, click-through window:
+/// with markup it shrinks and flies in a slight arc into the menu bar icon (0.35 s, ease-in) and the icon gives one small
+/// bounce; with nothing drawn (or Reduce Motion) it only fades (0.15 s). One image on one layer, no per-frame drawing.
+enum DrawCloseAnimation {
+    private static var window: NSWindow?
+
+    /// The editor window alone as it looks now (transparent where nothing is drawn), at point size to stay cheap on 5K.
+    @MainActor static func snapshot(of window: NSWindow) async -> CGImage? {
+        guard CGPreflightScreenCaptureAccess(),
+              let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+              let mine = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) else { return nil }
+        let config = SCStreamConfiguration()
+        config.width = max(1, Int(window.frame.width))
+        config.height = max(1, Int(window.frame.height))
+        config.showsCursor = false
+        config.backgroundColor = .clear
+        config.ignoreShadowsSingleWindow = true
+        return try? await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: mine), configuration: config)
+    }
+
+    static func play(_ image: CGImage, frame: NSRect, level: NSWindow.Level, fly: Bool) {
+        window?.orderOut(nil)
+        let w = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.hasShadow = false
+        w.ignoresMouseEvents = true          // clicks and typing go to the apps underneath while it plays
+        w.sharingType = .none
+        w.level = level
+        w.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
+        let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        view.wantsLayer = true
+        let layer = CALayer()
+        layer.frame = view.bounds
+        layer.contents = image
+        layer.contentsGravity = .resize
+        view.layer?.addSublayer(layer)
+        w.contentView = view
+        w.setFrame(frame, display: false)
+        w.orderFrontRegardless()
+        window = w
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock {
+            if window === w { window = nil }
+            w.orderOut(nil)
+            if fly { pulseIcon() }
+        }
+        if fly {
+            let start = CGPoint(x: frame.width / 2, y: frame.height / 2)
+            let target = iconPoint(in: frame) ?? CGPoint(x: frame.width - 80, y: frame.height - 12)
+            let path = CGMutablePath()
+            path.move(to: start)
+            path.addQuadCurve(to: target, control: CGPoint(x: start.x + (target.x - start.x) * 0.2, y: start.y + (target.y - start.y) * 0.95))
+            let move = CAKeyframeAnimation(keyPath: "position")
+            move.path = path
+            let shrink = CABasicAnimation(keyPath: "transform.scale")
+            shrink.fromValue = 1.0
+            shrink.toValue = 0.03
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [1.0, 0.9, 0.0]
+            fade.keyTimes = [0, 0.65, 1]
+            let group = CAAnimationGroup()
+            group.animations = [move, shrink, fade]
+            group.duration = 0.35
+            group.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            layer.position = target
+            layer.transform = CATransform3DMakeScale(0.03, 0.03, 1)
+            layer.opacity = 0
+            layer.add(group, forKey: "fly")
+        } else {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1.0
+            fade.toValue = 0.0
+            fade.duration = 0.15
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer.opacity = 0
+            layer.add(fade, forKey: "fade")
+        }
+        CATransaction.commit()
+    }
+
+    /// Centre of the SnapNow menu bar icon in the animation window's coordinates, or nil when it is on another display.
+    private static func iconPoint(in frame: NSRect) -> CGPoint? {
+        guard let b = Shell.shared.statusButton, let bw = b.window else { return nil }
+        let r = bw.convertToScreen(b.convert(b.bounds, to: nil))
+        let c = CGPoint(x: r.midX, y: r.midY)
+        guard frame.insetBy(dx: -1, dy: -1).contains(c) else { return nil }
+        return CGPoint(x: c.x - frame.minX, y: c.y - frame.minY)
+    }
+
+    /// One small bounce of the menu bar icon: "caught and stored".
+    private static func pulseIcon() {
+        guard let b = Shell.shared.statusButton else { return }
+        b.wantsLayer = true
+        guard let l = b.layer else { return }
+        let c = CGPoint(x: b.bounds.midX, y: b.bounds.midY)
+        func around(_ s: CGFloat) -> NSValue {
+            var m = CATransform3DMakeTranslation(c.x, c.y, 0)
+            m = CATransform3DScale(m, s, s, 1)
+            m = CATransform3DTranslate(m, -c.x, -c.y, 0)
+            return NSValue(caTransform3D: m)
+        }
+        let bounce = CAKeyframeAnimation(keyPath: "transform")
+        bounce.values = [around(1), around(1.3), around(0.92), around(1)]
+        bounce.keyTimes = [0, 0.35, 0.7, 1]
+        bounce.duration = 0.28
+        l.add(bounce, forKey: "snapnowPulse")
     }
 }

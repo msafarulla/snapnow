@@ -11,6 +11,8 @@ class Native {
   /// Draw mode ended: [shot] is the screen as it was behind the glass (null when it could not be taken); the answer is
   /// whether the drawing was kept as a capture.
   static Future<bool> Function(String? shot)? onCloseDraw;
+  /// Draw mode is about to lift: is anything drawn on the glass? (picks the closing animation)
+  static bool Function()? onDrawHasMarks;
   /// Draw mode: how bright the screen is behind the toolbar and the panel (0 black ... 1 white), about every 0.7 s.
   static void Function(List<double> luma)? onGlassLuma;
   static void Function()? onShowLibrary;
@@ -24,6 +26,7 @@ class Native {
         case 'openEditor': onOpenEditor?.call(call.arguments as String);
         case 'openDraw': onOpenDraw?.call(call.arguments as String);
         case 'closeDraw': return await onCloseDraw?.call(call.arguments as String?) ?? false;
+        case 'drawHasMarks': return onDrawHasMarks?.call() ?? false;
         case 'glassLuma': onGlassLuma?.call((call.arguments as List).map((e) => (e as num).toDouble()).toList());
         case 'showLibrary': onShowLibrary?.call();
         case 'capturesChanged': onCapturesChanged?.call();

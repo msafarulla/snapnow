@@ -14,6 +14,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     private let defaults = UserDefaults.standard
     private var statusItem: NSStatusItem!
+    /// The menu bar icon (draw mode's closing animation lands on it).
+    var statusButton: NSStatusBarButton? { statusItem?.button }
     private let popover = NSPopover()
     private let panel = CapturePanelController()
     private var menu: NSMenu!

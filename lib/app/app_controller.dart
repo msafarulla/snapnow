@@ -62,6 +62,7 @@ class AppController with TrayListener, WindowListener {
     Native.onOpenEditor = openEditor;
     Native.onOpenDraw = openDraw;
     Native.onCloseDraw = closeDraw;
+    Native.onDrawHasMarks = () => editorKey.currentState?.hasDrawMarks ?? false;
     Native.onShowLibrary = showLibrary;
     Native.onCapturesChanged = () => capturesVersion.value++;
     Native.onAppearanceChanged = (choice) => appearance.value = choice;
