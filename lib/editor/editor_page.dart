@@ -152,9 +152,33 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     // Draw mode moves the same State under a different parent (GlobalKey), so it arrives and leaves here, not in initState/dispose
     if (old.overlay != widget.overlay) {
       _lastGlassKey = null; // a new draw session starts with no frost layer on the native side
+      _toolbarDragAt = null; _toolbarDropLeft = null; // a toolbar drag cut short by switching modes would leave its ghost copy on screen
       _ToolButton.glass = widget.overlay;
       if (!widget.overlay) { _toolbarBright = null; _panelBright = null; }
+      if (widget.overlay) _drawRestore();
     }
+  }
+
+  /// The properties card: the editor's own setting, and draw mode's separate one (off until opened, so draw mode is one strip).
+  bool _drawInspector = false;
+  bool get _inspectorOn => widget.overlay ? _drawInspector : _inspectorShown;
+
+  /// Draw mode starts from the last tool and colour used there (a calm blue the first time), not the editor's red.
+  static const _drawFirstColor = Color(0xFF2F7BF5);
+  Future<void> _drawRestore() async {
+    final c = int.tryParse(await Native.getString('draw.color') ?? '');
+    final tn = await Native.getString('draw.tool');
+    final t = Tool.values.where((t) => t.name == tn).firstOrNull;
+    if (!mounted || !widget.overlay) return;
+    setState(() {
+      _color = c != null ? Color(c) : _drawFirstColor;
+      if (t != null && const [Tool.arrow, Tool.box, Tool.step, Tool.line, Tool.pen, Tool.text, Tool.callout].contains(t)) _tool = t;
+    });
+  }
+  void _drawSave() {
+    if (!widget.overlay) return;
+    Native.setString('draw.color', '${_color.toARGB32()}');
+    Native.setString('draw.tool', _tool.name);
   }
 
   @override
@@ -172,6 +196,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     });
     Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });
     Native.getBool('pinOnTop').then((on) { if (on == true && !_pinTouched) _setPinned(true, save: false); });
+    Native.getBool('draw.inspector').then((on) { if (mounted && on == true) setState(() => _drawInspector = true); });
     Native.getBool('inspector.hidden').then((hidden) { if (mounted && hidden == true) setState(() => _inspectorShown = false); });
     Native.getBool('toolbar.left').then((left) { if (mounted && left != null) setState(() => toolbarLeft.value = left); });
     Native.getString('callout.style').then((v) {
@@ -357,6 +382,12 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     if (dock != null) _setToolbarLeft(dock);
   }
 
+  /// A drag that can no longer finish by itself (its grip was rebuilt away, a trackpad gesture ended unseen): drop the ghost, dock nowhere.
+  void _toolbarDragCancel() {
+    if (!mounted || _toolbarDragAt == null) return;
+    setState(() { _toolbarDragAt = null; _toolbarDropLeft = null; });
+  }
+
   /// The toolbar card's right-click menu: move it to the other edge.
   Future<void> _showToolbarMenu(Offset globalPos) async {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -374,6 +405,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   }
 
   void _toggleInspector() {
+    if (widget.overlay) {                              // draw mode keeps its own setting
+      setState(() => _drawInspector = !_drawInspector);
+      Native.setBool('draw.inspector', _drawInspector);
+      return;
+    }
     setState(() => _inspectorShown = !_inspectorShown);
     Native.setBool('inspector.hidden', !_inspectorShown);
   }
@@ -382,7 +418,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   EdgeInsets get _chromeInsets => widget.overlay ? EdgeInsets.zero : widget.chromeInsets + EdgeInsets.only(
         top: _toolbarLeft ? 0 : _toolbarHeight + _chromeMargin * 2,
         left: _toolbarLeft ? _toolbarLeftWidth + _chromeMargin * 2 : 0,
-        right: _inspectorShown ? PropertiesPanel.width + _chromeMargin * 2 : 0,
+        right: _inspectorOn ? PropertiesPanel.width + _chromeMargin * 2 : 0,
       );
 
   /// The centred origin for an image of [size] at [scale], inside the chrome insets (shared by fit and zoom).
@@ -2159,6 +2195,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       _cropRect = t == Tool.crop && _state != null ? _imageRect : null;
       _cropHandle = null; _cropHover = null;
     });
+    _drawSave();
   }
 
   @override
@@ -2236,6 +2273,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   @override
   void pickColor(Color c, {bool refresh = true}) {
     setState(() => _color = c);
+    _drawSave();
     final a = selected;
     if (a != null && a.shape is! ImageShape) _restyleAll((x) => x.copyWith(color: c));
   }
@@ -2274,6 +2312,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   @override
   void applyQuickStyle(QuickStyle q) {
     setState(() { _color = q.colorValue; _size = q.size; });
+    _drawSave();
     final k = styleKind;
     if (k != null) {
       _styleDefaults[k] = q.style;
@@ -2440,7 +2479,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   Widget _scaffold(CanvasState? state) {
     final chrome = SnapChrome.of(context);
     const m = _chromeMargin;
-    final inspectorRoom = _inspectorShown ? PropertiesPanel.width + m : 0.0;
+    final inspectorRoom = _inspectorOn ? PropertiesPanel.width + m : 0.0;
     final dragging = _toolbarDragAt != null;
     final primary = Theme.of(context).colorScheme.primary;
     // The toolbar's dock: the strip down the left edge, or across the top of what the inspector leaves free
@@ -2449,11 +2488,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         : Positioned(top: m, left: m, right: m + inspectorRoom, height: _toolbarHeight, child: child);
     final scaffold = Scaffold(
       backgroundColor: widget.overlay ? Colors.transparent : chrome.backdrop, // draw mode: a clear glass over the live screen
-      body: LayoutBuilder(builder: (context, c) => Stack(key: _chromeKey, children: [
+      body: LayoutBuilder(builder: (context, c) => Listener(
+        behavior: HitTestBehavior.translucent,
+        // A mouse hover only arrives with no button down: if a drag is still on show, its end was lost, so the ghost goes
+        onPointerHover: (_) { if (_toolbarDragAt != null) _toolbarDragCancel(); },
+        child: Stack(key: _chromeKey, children: [
         Positioned.fill(child: state == null ? const Center(child: CircularProgressIndicator()) : _canvasArea(state)),
-        // The toolbar card, centred in its dock; dimmed while its grip is being dragged
-        dock(_toolbarLeft, Opacity(opacity: dragging ? 0.35 : 1, child: Center(child: KeyedSubtree(key: _glassToolbarKey, child: _tone(_toolbarBright, _toolbar()))))),
-        if (_inspectorShown)
+        // The toolbar card, centred in its dock. While its grip is dragged it is invisible (but stays, so the drag goes on):
+        // only the copy at the pointer shows. Dimmed instead, it still read as a second strip on draw mode's clear glass.
+        dock(_toolbarLeft, Opacity(opacity: dragging ? 0 : 1, child: Center(child: KeyedSubtree(key: _glassToolbarKey, child: _tone(_toolbarBright, _toolbar()))))),
+        if (_inspectorOn)
           Positioned(
             top: m,
             right: m,
@@ -2475,7 +2519,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
               left: at.dx - 12, top: m, bottom: m + widget.chromeInsets.bottom,
               child: IgnorePointer(child: Align(
                 alignment: Alignment(-1, (at.dy / math.max(1, c.maxHeight)).clamp(0, 1) * 2 - 1),
-                child: Opacity(opacity: 0.9, child: _toolbar(vertical: true, ghost: true)),
+                child: _tone(_toolbarBright, _toolbar(vertical: true, ghost: true)),
               )),
             )
           else
@@ -2483,11 +2527,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
               top: at.dy - 12, left: m, right: m + inspectorRoom,
               child: IgnorePointer(child: Align(
                 alignment: Alignment((at.dx / math.max(1, c.maxWidth)).clamp(0, 1) * 2 - 1, -1),
-                child: Opacity(opacity: 0.9, child: _toolbar(vertical: false, ghost: true)),
+                child: _tone(_toolbarBright, _toolbar(vertical: false, ghost: true)),
               )),
             ),
         ],
-      ])),
+      ]))),
     );
     return widget.overlay ? _glassTheme(scaffold) : scaffold;
   }
@@ -3170,10 +3214,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         _ToolButton(icon: Icons.save_outlined, label: 'Save', onTap: save, primary: hasUnsavedChanges),
       ],
       _ToolButton(
-        icon: _inspectorShown ? Icons.view_sidebar : Icons.view_sidebar_outlined,
+        icon: _inspectorOn ? Icons.view_sidebar : Icons.view_sidebar_outlined,
         label: 'Inspector',
-        active: _inspectorShown,
-        tooltip: _inspectorShown ? 'Hide the properties panel' : 'Show the properties panel',
+        active: _inspectorOn,
+        tooltip: _inspectorOn ? 'Hide the properties panel' : 'Show the properties panel',
         onTap: _toggleInspector,
       ),
     ];
@@ -3196,7 +3240,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final hidden = items.sublist(n);
       final moreActive = hidden.any((i) => i.$1 == barTool.name);
       return GestureDetector(onSecondaryTapUp: (d) => _showToolbarMenu(d.globalPosition), child: _ToolbarCard(vertical: vertical, children: [
-        _ToolbarGrip(vertical: vertical, onDrag: _toolbarDragTo, onDrop: _toolbarDragEnd),
+        _ToolbarGrip(vertical: vertical, onDrag: _toolbarDragTo, onDrop: _toolbarDragEnd, onCancel: _toolbarDragCancel),
         if (leading != null) ...[leading, _ToolbarGap(vertical: vertical)],
         for (final i in shown)
           _ToolButton(icon: i.$2, label: i.$3, active: i.$1 == barTool.name, onTap: () => run(i.$1)),
@@ -3238,30 +3282,51 @@ class _ToolbarCard extends StatelessWidget {
 
 /// The grip at the start of the toolbar: drag it to the top or the left edge of the window to dock the
 /// toolbar there (the editor lights up the dock under the pointer and moves the card on release).
-class _ToolbarGrip extends StatelessWidget {
+class _ToolbarGrip extends StatefulWidget {
   static const extent = 18.0; // along the bar
   static const tooltip = 'Drag to the top or the left edge';
   final bool vertical;
   final ValueChanged<Offset> onDrag; // the pointer's global position, from the first move on
   final VoidCallback onDrop;
-  const _ToolbarGrip({required this.vertical, required this.onDrag, required this.onDrop});
+  final VoidCallback onCancel; // the grip went away mid-drag: no end callback will ever come
+  const _ToolbarGrip({required this.vertical, required this.onDrag, required this.onDrop, required this.onCancel});
+
+  @override
+  State<_ToolbarGrip> createState() => _ToolbarGripState();
+}
+
+class _ToolbarGripState extends State<_ToolbarGrip> {
+  bool _dragging = false;
+
+  @override
+  void dispose() {
+    // A GestureDetector disposed mid-drag calls neither onPanEnd nor onPanCancel, which left the toolbar's ghost copy stuck on screen
+    if (_dragging) {
+      final cancel = widget.onCancel;
+      WidgetsBinding.instance.addPostFrameCallback((_) => cancel());
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final vertical = widget.vertical;
     final color = Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.55);
     return MouseRegion(
       cursor: SystemMouseCursors.grab,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onPanStart: (d) => onDrag(d.globalPosition),
-        onPanUpdate: (d) => onDrag(d.globalPosition),
-        onPanEnd: (_) => onDrop(),
-        onPanCancel: onDrop,
+        // A real button-down drag only: a two-finger trackpad swipe over the grip also reads as a pan (offset by the swipe), and its end can go missing
+        supportedDevices: const {PointerDeviceKind.mouse, PointerDeviceKind.touch, PointerDeviceKind.stylus},
+        onPanStart: (d) { _dragging = true; widget.onDrag(d.globalPosition); },
+        onPanUpdate: (d) => widget.onDrag(d.globalPosition),
+        onPanEnd: (_) { _dragging = false; widget.onDrop(); },
+        onPanCancel: () { _dragging = false; widget.onDrop(); },
         child: Tooltip(
-          message: tooltip,
+          message: _ToolbarGrip.tooltip,
           child: SizedBox(
-            width: vertical ? _ToolButton.width : extent,
-            height: vertical ? extent : _ToolButton.height,
+            width: vertical ? _ToolButton.width : _ToolbarGrip.extent,
+            height: vertical ? _ToolbarGrip.extent : _ToolButton.height,
             child: RotatedBox(quarterTurns: vertical ? 1 : 0, child: Icon(Icons.drag_indicator, size: 16, color: color)),
           ),
         ),

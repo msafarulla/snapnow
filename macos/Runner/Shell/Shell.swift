@@ -23,6 +23,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let copyImageItem = NSMenuItem(title: "Copy to Clipboard", action: #selector(toggleCopyImage), keyEquivalent: "")
     private let microphoneItem = NSMenuItem(title: "Record Microphone", action: #selector(toggleMicrophone), keyEquivalent: "")
     private let liveDrawItem = NSMenuItem(title: "Draw Mode (double-tap ⌥)", action: #selector(toggleLiveDraw), keyEquivalent: "")
+    private let drawNowItem = NSMenuItem(title: "Start Draw Mode Now", action: #selector(drawNow), keyEquivalent: "")
+    private let drawPermItem = NSMenuItem(title: "", action: #selector(fixDrawPermission), keyEquivalent: "")
     private let altHandItem = NSMenuItem(title: "Option+Click Hand", action: #selector(toggleAltHand), keyEquivalent: "")
     private let recorder = Recorder()
     private var recordingTimer: Timer?
@@ -136,7 +138,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             hotkeysItem.submenu?.addItem(entry)
         }
         menu.addItem(hotkeysItem)
-        for entry in [microphoneItem, altHandItem, liveDrawItem, loginItem] {
+        for entry in [microphoneItem, altHandItem, liveDrawItem, drawNowItem, drawPermItem, loginItem] {
             entry.target = self
             menu.addItem(entry)
         }
@@ -244,6 +246,11 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         microphoneItem.state = defaults.bool(forKey: Prefs.microphone) ? .on : .off
         altHandItem.state = defaults.bool(forKey: Prefs.altClickHand) ? .on : .off
         liveDrawItem.state = defaults.bool(forKey: Prefs.liveDraw) ? .on : .off
+        drawNowItem.title = LiveDraw.shared.active ? "End Draw Mode" : "Start Draw Mode Now"
+        if let missing = LiveDraw.missingPermission {      // the double-tap cannot hear the key: say so, one click to the right pane
+            drawPermItem.title = "⚠︎ Double-tap ⌥ needs \(missing) — click to allow"
+            drawPermItem.isHidden = false
+        } else { drawPermItem.isHidden = true }
 
         recentMenu.removeAllItems()
         let files = (try? FileManager.default.contentsOfDirectory(at: Capture.folder, includingPropertiesForKeys: [.contentModificationDateKey],
@@ -651,6 +658,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     @objc private func toggleOpenEditor() { defaults.set(!defaults.bool(forKey: Prefs.openEditor), forKey: Prefs.openEditor) }
     @objc private func toggleCopyImage() { defaults.set(!defaults.bool(forKey: Prefs.copyImage), forKey: Prefs.copyImage) }
+    @objc private func drawNow() { LiveDraw.shared.toggle() }
+    @objc private func fixDrawPermission() { LiveDraw.openPermissionSettings() }
     @objc private func toggleLiveDraw() { defaults.set(!defaults.bool(forKey: Prefs.liveDraw), forKey: Prefs.liveDraw) }
 
     @objc private func toggleAltHand() { defaults.set(!defaults.bool(forKey: Prefs.altClickHand), forKey: Prefs.altClickHand) }

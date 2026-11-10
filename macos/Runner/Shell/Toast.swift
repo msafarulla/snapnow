@@ -485,6 +485,11 @@ final class LiveDraw {
             UserDefaults.standard.set(true, forKey: promptedKey)
             _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         }
+        // macOS also wants Input Monitoring to see a modifier key (double-tap Option) outside this app
+        if !CGPreflightListenEventAccess(), !UserDefaults.standard.bool(forKey: "liveDraw.promptedInputMonitoring") {
+            UserDefaults.standard.set(true, forKey: "liveDraw.promptedInputMonitoring")
+            _ = CGRequestListenEventAccess()
+        }
         let busy: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
         if let m = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] e in self?.flags(e) }) { monitors.append(m) }
         if let m = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] e in self?.flags(e); return e }) { monitors.append(m) }
@@ -514,6 +519,17 @@ final class LiveDraw {
 
     func toggle() { guard !leaving else { return }; active ? leave() : enter() }
 
+    /// Which macOS permission the double-tap is missing, if any (nil when it can hear the Option key).
+    static var missingPermission: String? {
+        if !CGPreflightListenEventAccess() { return "Input Monitoring" }
+        if !AXIsProcessTrusted() { return "Accessibility" }
+        return nil
+    }
+    static func openPermissionSettings() {
+        let pane = CGPreflightListenEventAccess() ? "Privacy_Accessibility" : "Privacy_ListenEvent"
+        if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(u) }
+    }
+
     private func enter() {
         let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
         guard let screen, let url = glassCanvas(for: screen) else { return }
@@ -523,7 +539,9 @@ final class LiveDraw {
         startSampling()
         NSApp.activate()
         expand()                          // a clear, display-sized window BEFORE the editor shows, so it never flashes as a normal window
+        editorWindow?.alphaValue = 0
         editorWindow?.makeKeyAndOrderFront(nil)
+        NSAnimationContext.runAnimationGroup { c in c.duration = 0.16; self.editorWindow?.animator().alphaValue = 1 }   // a short fade, not a pop
         SnapLiteNative.shared?.invoke("openDraw", url.path)
         for delay in [0.3, 0.8] {         // once more after Flutter shows it, in case the window manager resized it
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in if self?.active == true { self?.expand() } }
@@ -534,16 +552,26 @@ final class LiveDraw {
     private func glassCanvas(for screen: NSScreen) -> URL? {
         let scale = screen.backingScaleFactor
         let w = Int(screen.frame.width * scale), h = Int(screen.frame.height * scale)
-        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-              let cg = ctx.makeImage() else { return nil }
-        let rep = NSBitmapImageRep(cgImage: cg)
-        rep.size = screen.frame.size
-        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("SnapLite", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("glass-\(Int(Date().timeIntervalSince1970)).png")
-        return (try? png.write(to: url)) != nil ? url : nil
+        // The empty picture is built (and PNG-encoded, slow on a 5K display) once per display size; each session gets a cheap copy,
+        // because the session file is later written to (markup) and so cannot be shared.
+        let template = dir.appendingPathComponent("glass-template-\(w)x\(h).png")
+        if !FileManager.default.fileExists(atPath: template.path) {
+            guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+                  let cg = ctx.makeImage() else { return nil }
+            let rep = NSBitmapImageRep(cgImage: cg)
+            rep.size = screen.frame.size
+            guard let png = rep.representation(using: .png, properties: [:]), (try? png.write(to: template)) != nil else { return nil }
+        }
+        // old session files are not needed once they have been captured
+        for f in (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        where f.lastPathComponent.hasPrefix("glass-") && !f.lastPathComponent.hasPrefix("glass-template-") {
+            try? FileManager.default.removeItem(at: f)
+        }
+        let url = dir.appendingPathComponent("glass-\(Int(Date().timeIntervalSince1970 * 1000)).png")
+        return (try? FileManager.default.copyItem(at: template, to: url)) != nil ? url : nil
     }
 
     // The frosted layer under Flutter, visible only inside the floating cards (see EditorPageState._glassTheme). It lives in a
