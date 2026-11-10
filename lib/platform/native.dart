@@ -8,6 +8,8 @@ class Native {
   static void Function(String? path)? onRecordingFinished;
   static void Function(String path)? onOpenEditor;
   static void Function(String path)? onOpenDraw;
+  /// Draw mode's glass just became key: send the canvas cursor to macOS again (see EditorPageState.kickCursor).
+  static void Function()? onCursorKick;
   /// Draw mode ended: [shot] is the screen as it was behind the glass (null when it could not be taken); the answer is
   /// whether the drawing was kept as a capture.
   static Future<bool> Function(String? shot)? onCloseDraw;
@@ -25,6 +27,7 @@ class Native {
         case 'recordingFinished': onRecordingFinished?.call(call.arguments as String?);
         case 'openEditor': onOpenEditor?.call(call.arguments as String);
         case 'openDraw': onOpenDraw?.call(call.arguments as String);
+        case 'cursorKick': onCursorKick?.call();
         case 'closeDraw': return await onCloseDraw?.call(call.arguments as String?) ?? false;
         case 'drawHasMarks': return onDrawHasMarks?.call() ?? false;
         case 'glassLuma': onGlassLuma?.call((call.arguments as List).map((e) => (e as num).toDouble()).toList());

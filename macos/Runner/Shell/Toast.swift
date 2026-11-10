@@ -549,13 +549,57 @@ final class LiveDraw {
         expand()                          // clear, display-sized, on every Space for the session
         editorWindow?.alphaValue = 0
         editorWindow?.orderFrontRegardless()
-        NSApp.activate()
-        editorWindow?.makeKey()
+        takeFocus()
         NSAnimationContext.runAnimationGroup { c in c.duration = 0.16; self.editorWindow?.animator().alphaValue = 1 }   // a short fade, not a pop
         SnapLiteNative.shared?.invoke("openDraw", url.path)
         for delay in [0.3, 0.8] {         // once more after Flutter shows it, in case the window manager resized it
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in if self?.active == true { self?.expand() } }
         }
+    }
+
+    private var activeObserver: NSObjectProtocol?
+
+    /// Makes the glass the key window of the active app, so the pointer gets the tool's cursor and hover reaches Flutter
+    /// at once (not only after a first click). macOS 14's cooperative NSApp.activate() is refused while another app is
+    /// frontmost (a double-tap is no click into SnapNow), so the old, forcing activation is used. That is safe for Spaces
+    /// only because the window is already on screen on every Space (expand + orderFrontRegardless before this).
+    private func takeFocus() {
+        guard let w = editorWindow else { return }
+        w.acceptsMouseMovedEvents = true
+        if let o = activeObserver { NotificationCenter.default.removeObserver(o) }
+        activeObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            if let o = self.activeObserver { NotificationCenter.default.removeObserver(o); self.activeObserver = nil }
+            self.makeGlassKey()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        w.makeKey()
+        if NSApp.isActive { makeGlassKey() }
+        // belt and braces: activation is asynchronous; once more shortly after in case the notification came before the observer
+        for delay in [0.2, 0.5, 1.0] {     // after the window is key: Flutter re-sends the tool's cursor
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.active else { return }
+                SnapLiteNative.shared?.invoke("cursorKick")
+            }
+        }
+        for delay in [0.12, 0.35] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.active, let w = self.editorWindow, !w.isKeyWindow || !NSApp.isActive else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.makeGlassKey()
+            }
+        }
+    }
+
+    /// Key + a cursor refresh: a zero-distance mouse-moved at the pointer, so Flutter sees hover and sets the tool cursor
+    /// without waiting for the user to move or click (a move is not a click, so the first click still draws).
+    private func makeGlassKey() {
+        guard active, let w = editorWindow, w.isVisible else { return }
+        w.makeKey()
+        let p = NSEvent.mouseLocation
+        let top = NSScreen.screens.first?.frame.maxY ?? 0                 // CG event coordinates: top-left of the first display
+        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: CGPoint(x: p.x, y: top - p.y), mouseButton: .left)?
+            .post(tap: .cghidEventTap)
     }
 
     /// Where the glass goes: the display of the window you are working in (the frontmost app's frontmost window),
@@ -796,6 +840,7 @@ final class LiveDraw {
         guard !leaving else { return }
         leaving = true
         active = false
+        if let o = activeObserver { NotificationCenter.default.removeObserver(o); activeObserver = nil }
         sampling?.cancel(); lastRects = []
         Task { @MainActor [weak self] in
             guard let self else { return }

@@ -426,7 +426,11 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             // .transient only notices outside clicks while SnapNow is active, and activate() is just a request
             // (often ignored for a menu bar app), so a click in any other app closes the panel too. Global
             // mouse monitors need no Accessibility permission; clicks on our own icon aren't reported here.
-            outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            // After a draw-mode session macOS also reports clicks INSIDE the panel to this monitor; closing on that mouse-down
+            // swallowed the first press of every panel button (Library, Capture, chips), so clicks on the panel itself are skipped.
+            outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] e in
+                if let self, let pw = self.popover.contentViewController?.view.window,
+                   e.windowNumber == pw.windowNumber || pw.frame.contains(NSEvent.mouseLocation) { return }
                 self?.popover.performClose(nil)
             }
         }

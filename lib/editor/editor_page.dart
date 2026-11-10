@@ -982,6 +982,25 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     if (h != _cropHover) setState(() => _cropHover = h);
   }
 
+
+  /// Flutter sends a cursor to macOS only when the kind changes. When draw mode opens, macOS puts the arrow back as the
+  /// glass becomes key (after Flutter already set the tool's cursor), so Flutter believes the crosshair is still showing
+  /// and never sends it again until a click. One frame of a different cursor makes it send the right one again.
+  bool _cursorKick = false;
+  bool _hoverKick = false;
+
+  /// Draw mode opened: the first hover of this session also re-sends the cursor.
+  void armCursorKick() => _hoverKick = true;
+
+  void kickCursor() {
+    if (!mounted || _cursorKick) return;
+    setState(() => _cursorKick = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _cursorKick = false);
+    });
+  }
+
   /// The resize cursor for the crop handle under the pointer (two-sided arrow), or move inside the rect.
   MouseCursor get _cropCursor => switch (_cropHover) {
         0 || 3 => SystemMouseCursors.resizeUpLeftDownRight, // top-left / bottom-right corners
@@ -2673,15 +2692,20 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             ),
             Positioned.fill(
               child: MouseRegion(
-                cursor: _tool == Tool.crop
-                    ? _cropCursor
-                    : _tool == Tool.select ? SystemMouseCursors.basic : SystemMouseCursors.precise,
+                cursor: _cursorKick
+                    ? (_tool == Tool.select ? SystemMouseCursors.precise : SystemMouseCursors.basic)
+                    : _tool == Tool.crop
+                        ? _cropCursor
+                        : _tool == Tool.select ? SystemMouseCursors.basic : SystemMouseCursors.precise,
                 child: GestureDetector(
                   onSecondaryTapUp: (d) => _showCanvasMenu(d.globalPosition),
                   child: Listener(
                     key: const ValueKey('snaplite-canvas'), // for widget tests
                     behavior: HitTestBehavior.opaque,
-                    onPointerHover: (e) { if (_tool == Tool.crop) _hoverCrop(toImage(e.localPosition)); },
+                    onPointerHover: (e) {
+                      if (_hoverKick) { _hoverKick = false; kickCursor(); }
+                      if (_tool == Tool.crop) _hoverCrop(toImage(e.localPosition));
+                    },
                     onPointerDown: (e) {
                       _focus.requestFocus();
                       if (_startsPan(e)) {

@@ -61,6 +61,7 @@ class AppController with TrayListener, WindowListener {
     Native.init();
     Native.onOpenEditor = openEditor;
     Native.onOpenDraw = openDraw;
+    Native.onCursorKick = () => editorKey.currentState?.kickCursor();
     Native.onCloseDraw = closeDraw;
     Native.onDrawHasMarks = () => editorKey.currentState?.hasDrawMarks ?? false;
     Native.onShowLibrary = showLibrary;
@@ -110,6 +111,7 @@ class AppController with TrayListener, WindowListener {
     // (a hidden window schedules no frames, so waiting for one before showing would wait forever).
     if (!await windowManager.isVisible()) await windowManager.show();
     await libraryKey.currentState?.openDraw(path);
+    editorKey.currentState?.armCursorKick();
   }
 
   bool drawing = false;
