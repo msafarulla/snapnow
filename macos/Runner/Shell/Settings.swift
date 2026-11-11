@@ -7,7 +7,7 @@ enum Prefs {
     static let openEditor = "openEditorAfterCapture"
     static let copyImage = "copyAfterCapture"
     static let microphone = "recordMicrophone"
-    /// Option+click anywhere shows the pointing hand (same as the WMOS automation). Default on.
+    /// Option+click anywhere shows the pointing hand (same as my browser automation). Default on.
     static let altClickHand = "altClickHand"
     /// Double-tap Option freezes the screen and opens it full-screen in the editor for drawing (session mode). Default on.
     static let liveDraw = "liveDrawMode"

@@ -200,12 +200,12 @@ enum CountdownHUD {
 
 /// Option+click anywhere on screen pops the pointing hand at the click: it scales in, swings 45 degrees about
 /// its fingertip, holds about three seconds, then fades. Same picture and timing as the Option+click hand in
-/// the WMOS automation (daily.py). The global mouse monitor needs no extra permission; clicks inside
+/// my browser automation. The global mouse monitor needs no extra permission; clicks inside
 /// SnapNow's own windows are not shown. Menu toggle "Option+Click Hand" (default on).
 final class AltClickHand {
     static let shared = AltClickHand()
     private var monitor: Any?
-    private let size = CGSize(width: 90, height: 71.79)      // points, as in the WMOS script
+    private let size = CGSize(width: 90, height: 71.79)      // points, as in the browser script
     private let tip = CGPoint(x: 2.68, y: 24.64)             // fingertip, measured from the picture's top-left
     private let reach: CGFloat = 150                          // overlay window is (2 x reach) square: room for the swing
 
