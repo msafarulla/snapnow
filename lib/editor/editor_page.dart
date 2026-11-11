@@ -271,12 +271,6 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   /// Edits since the file was opened or last saved.
   bool get hasUnsavedChanges => _state != null && !identical(_state, _savedState);
 
-  /// Esc while the copied GIF is playing: closes just the preview (true), not the window.
-  bool closeGifPreview() {
-    if (_gifPreview == null) return false;
-    setState(() => _gifPreview = null);
-    return true;
-  }
   String? get path => _path;
   @visibleForTesting
   CanvasState? get state => _state;
@@ -303,7 +297,6 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   /// After Copy, "marching ants" run around the image until the next edit or click.
   bool _copied = false;
   /// The GIF ⇧⌘C just copied, playing over the canvas until clicked away.
-  Uint8List? _gifPreview;
   final _ants = ValueNotifier<double>(0);
 
   /// Pin keeps the window above other apps (⌥⌘T); remembered between launches.
@@ -1442,11 +1435,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     final String path;
     try {
       final dir = Directory('${Directory.systemTemp.path}/SnapNow Share')..createSync(recursive: true);
-      final preview = _gifPreview; // context-aware: share the animated GIF you're looking at, not the still
-      if (preview != null) {
-        path = '${dir.path}/${_gifName()}.gif';
-        await File(path).writeAsBytes(preview, flush: true);
-      } else if (BuildUpGif.marches(s)) {
+      if (BuildUpGif.marches(s)) {
         path = '${dir.path}/${_gifName()}.gif';
         await File(path).writeAsBytes(await BuildUpGif.renderMarching(s), flush: true);
       } else {
@@ -1469,7 +1458,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   /// Saves back to the capture's file, or a new file in Pictures › SnapNow. The file is the finished
   /// image with the markup kept inside it, so reopening it later brings the annotations back.
-  Future<void> save() async {
+  /// [quiet]: no "Saved" toast (draw mode's close saves silently; the closing animation is the only sign).
+  Future<void> save({bool quiet = false}) async {
     _endTextEdit();
     var png = await _flatPng();
     if (png == null) return;
@@ -1484,7 +1474,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     setState(() => _savedState = _state);
     await windowManager.setTitle('SnapNow — ${path.split('/').last}');
     AppController.instance.capturesVersion.value++;
-    await Native.toast('Saved');
+    if (!quiet) await Native.toast('Saved');
   }
 
   /// Whether anything is drawn on the glass right now (draw mode's closing animation flies only then).
@@ -1499,7 +1489,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     try {
       final frame = await (await ui.instantiateImageCodec(await File(shotPath).readAsBytes())).getNextFrame();
       setState(() { _state = st.copyWith(image: frame.image); _path = shotPath; });
-      await save();
+      await save(quiet: true); // the second double-tap of Option shows no notice, ever (only the closing animation)
       return true;
     } catch (e, st) {
       debugPrint('Draw capture not kept: $e\n$st');
@@ -1886,8 +1876,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     }
   }
 
-  /// ⇧⌘C: the build-up GIF on the clipboard (marching ants keep moving in it; ⌘C is always the still). The file lives in a temp
-  /// folder, since apps like Messages and Slack paste the file to keep it animated.
+  /// ⇧⌘C: the build-up GIF on the clipboard and nothing else (marching ants keep moving in it; ⌘C is always the still). The file
+  /// lives in a temp folder outside the captures folder (never a Library entry), since apps like Messages and Slack paste the file
+  /// to keep it animated. Only a toast confirms it (never in a screenshot); until 1.80.21 a full-canvas preview card with a
+  /// "Copied as animated GIF" banner covered the editor (and in draw mode the live screen and the closing-animation picture).
   Future<void> copyAnimatedGif() async {
     final s = await _gifState();
     if (s == null) return;
@@ -1899,7 +1891,6 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       await File(path).writeAsBytes(gif, flush: true);
       await Native.copyGif(path);
       await Native.toast('Copied GIF');
-      if (mounted) setState(() => _gifPreview = gif);
     } catch (e, st) {
       debugPrint('GIF: $e\n$st');
       await Native.toast("Couldn't make the GIF", symbol: 'exclamationmark.triangle.fill');
@@ -2797,53 +2788,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             if (_thicknessTarget case final a?) _thicknessSlider(a, origin, scale, Size(constraints.maxWidth, constraints.maxHeight)),
             if (_colorBarTarget case final a?) _colorBar(a, origin, scale, Size(constraints.maxWidth, constraints.maxHeight)),
             Positioned(right: ins.right + 12, bottom: ins.bottom + 12, child: _zoomPill()),
-            if (_gifPreview case final gif?) Positioned.fill(child: _gifPreviewCard(gif)),
           ]),
         ),
       ));
     });
-  }
-
-  /// The copied GIF playing over the dimmed canvas, so you see what you'll paste; a click or Esc closes it.
-  Widget _gifPreviewCard(Uint8List gif) {
-    final scheme = Theme.of(context).colorScheme;
-    void close() => setState(() => _gifPreview = null);
-    return CallbackShortcuts(
-      bindings: {const SingleActivator(LogicalKeyboardKey.escape): close},
-      child: Focus(
-        autofocus: true,
-        child: GestureDetector(
-          key: const ValueKey('snaplite-gif-preview'),
-          behavior: HitTestBehavior.opaque,
-          onTap: close,
-          child: ColoredBox(
-            // Opaque, so the live editor canvas (the same capture) doesn't ghost through behind the GIF.
-            color: const Color(0xFF17171A),
-            child: Padding(
-              padding: const EdgeInsets.all(28),
-              child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Flexible(
-                  child: DecoratedBox(
-                    decoration: const BoxDecoration(boxShadow: [BoxShadow(color: Color(0x66000000), blurRadius: 18, offset: Offset(0, 4))]),
-                    child: Image.memory(gif, fit: BoxFit.contain, gaplessPlayback: true, filterQuality: FilterQuality.medium),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Material(
-                  color: scheme.surfaceContainerHigh.withValues(alpha: 0.95),
-                  shape: const StadiumBorder(),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    child: Text('Copied as animated GIF: paste it anywhere, or Share (top-right) to AirDrop it  ·  Esc to close',
-                        style: TextStyle(fontSize: 12, color: scheme.onSurface)),
-                  ),
-                ),
-              ]),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   /// − / percent / + in the corner; clicking the percent switches between Fit and 100%.

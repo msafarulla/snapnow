@@ -522,7 +522,10 @@ final class LiveDraw {
 
     private var editorWindow: NSWindow? { NSApp.windows.first { $0 is MainFlutterWindow } }
 
-    func toggle() { guard !leaving else { return }; active ? leave() : enter() }
+    func toggle() {
+        if leaving { openWhenDone.toggle(); return }   // a double-tap while the last session is still being saved
+        active ? leave() : enter()
+    }
 
     /// Which macOS permission the double-tap is missing, if any (nil when it can hear the Option key).
     static var missingPermission: String? {
@@ -543,7 +546,10 @@ final class LiveDraw {
         previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
         drawScreen = screen
         active = true
-        startSampling()
+        // Dart starts on the new empty glass at once, in parallel with the window work below. Its replies to the main thread
+        // (isVisible, drawReady) are handled only after enter() returns, so they always find the window on screen on this Space.
+        glassShown = false
+        SnapLiteNative.shared?.invoke("openDraw", url.path)
         // The window is put on screen HERE, on the current Space, before SnapNow is activated: activating first lets macOS
         // switch to the Space the editor window last belonged to (where the previous session was opened).
         expand()                          // clear, display-sized, on every Space for the session
@@ -552,9 +558,8 @@ final class LiveDraw {
         takeFocus()
         // Invisible until Dart reports the new, empty glass painted (drawReady -> revealGlass): until Flutter paints a frame
         // the window still shows its last one, the drawing of the previous session. Fallback if the report never comes.
-        glassShown = false
-        SnapLiteNative.shared?.invoke("openDraw", url.path)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in self?.revealGlass() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.revealGlass() }
+        startSampling()                   // brightness sampling (adaptive icon colour) starts after the window work
         for delay in [0.3, 0.8] {         // once more after Flutter shows it, in case the window manager resized it
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in if self?.active == true { self?.expand() } }
         }
@@ -736,7 +741,7 @@ final class LiveDraw {
     func revealGlass() {
         guard active, !leaving, !glassShown, let w = editorWindow else { return }
         glassShown = true
-        NSAnimationContext.runAnimationGroup { c in c.duration = 0.12; w.animator().alphaValue = 1 }   // a short fade, not a pop
+        NSAnimationContext.runAnimationGroup { c in c.duration = 0.08; w.animator().alphaValue = 1 }   // a short fade, not a pop
     }
 
     // ---- Adaptive icon colour: how bright is the live screen behind each strip? ----
@@ -823,10 +828,10 @@ final class LiveDraw {
         }
     }
 
-    /// The screen as it is behind the glass (SnapNow's own windows left out), as a normal capture file, or nil.
-    @MainActor private func screenWithoutOverlay() async -> URL? {
-        guard let w = editorWindow, let screen = w.screen ?? NSScreen.main,
-              let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+    /// The screen as it is behind the glass (SnapNow's own windows left out), grabbed at once. Only the ScreenCaptureKit calls
+    /// run here (async, not blocking the main thread); turning it into a file is writeShot(), off the main thread.
+    @MainActor private func grabScreen(_ screen: NSScreen?) async -> CGImage? {
+        guard let screen, let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
               CGPreflightScreenCaptureAccess(),
               let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
               let display = content.displays.first(where: { $0.displayID == id }) else { return nil }
@@ -836,58 +841,81 @@ final class LiveDraw {
         config.height = Int(screen.frame.height * screen.backingScaleFactor)
         config.showsCursor = false
         config.captureResolution = .best
-        guard let image = try? await SCScreenshotManager.captureImage(
-            contentFilter: SCContentFilter(display: display, excludingWindows: mine), configuration: config) else { return nil }
-        let rep = NSBitmapImageRep(cgImage: image)
-        rep.size = screen.frame.size
-        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
-        let url = Capture.newCaptureURL(prefix: "SnapNow Session")
-        return (try? png.write(to: url)) != nil ? url : nil
+        return try? await SCScreenshotManager.captureImage(
+            contentFilter: SCContentFilter(display: display, excludingWindows: mine), configuration: config)
     }
 
-    /// Lifting the glass: if anything was drawn, the screen behind it becomes the picture under the drawing and the
-    /// whole thing is saved as a normal capture (the Library / editor open it again with every mark still editable);
-    /// an empty glass leaves nothing behind.
+    /// PNG encoding and writing of the grabbed screen as a normal capture file, on a background thread (slow on 5K).
+    private static func writeShot(_ image: CGImage, pointSize: NSSize) async -> URL? {
+        let url = Capture.newCaptureURL(prefix: "SnapNow Session")
+        return await Task.detached(priority: .utility) { () -> URL? in
+            let rep = NSBitmapImageRep(cgImage: image)
+            rep.size = pointSize
+            guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
+            return (try? png.write(to: url)) != nil ? url : nil
+        }.value
+    }
+
+    /// A double-tap that came while the previous session was still being saved: draw mode opens once that is done.
+    private var openWhenDone = false
+
+    /// Lifting the glass. At once: the glass stops taking the mouse, the keyboard goes back to the app you were in, and the
+    /// glass vanishes (or, with markup and the closing animation on, it lives on only as the click-through animation picture).
+    /// Then, in the background: the screen behind it (grabbed first, before anything changes) becomes the picture under the
+    /// drawing and the whole is saved as a normal capture (every mark still editable); an empty glass leaves nothing behind.
     private func leave() {
-        guard !leaving else { return }
+        guard !leaving, let w = editorWindow else { return }
         leaving = true
         active = false
         if let o = activeObserver { NotificationCenter.default.removeObserver(o); activeObserver = nil }
         sampling?.cancel(); lastRects = []
+        let screen = w.screen ?? drawScreen ?? NSScreen.main
+        let animate = Prefs.onByDefault(Prefs.liveDrawCloseAnimation)
+        // 1. Input and focus back, now. The window stays ordered in (alpha 0 later) until Dart has saved: a hidden Flutter
+        // window paints nothing, and the save may need it; click-through and inactive, it is in nobody's way.
+        w.ignoresMouseEvents = true
+        if !animate { removeFrost(); w.alphaValue = 0 }
+        if let prev = previousApp, !prev.isTerminated {
+            prev.activate(options: [])            // it is on this Space, so nothing switches
+        } else {
+            NSApp.deactivate()
+        }
+        previousApp = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // Closing animation (Prefs.liveDrawCloseAnimation): a picture of the glass as it is now plays in its own click-through
-            // window, so the real window is free at once and the capture below (which leaves all SnapNow windows out) never has it.
-            if Prefs.onByDefault(Prefs.liveDrawCloseAnimation), let w = self.editorWindow {
-                async let marks = self.drawHasMarks()
+            // 2. The screen behind the glass, grabbed first (SnapNow's windows are left out, so the glass is not in it).
+            async let grabbed = self.grabScreen(screen)
+            // 3. The glass: with markup and the animation on, a picture of it flies to the menu bar icon in its own
+            // click-through window; otherwise it just vanishes. Nothing here waits for the save.
+            if animate {
                 async let picture = DrawCloseAnimation.snapshot(of: w)
-                let (drawn, image) = await (marks, picture)
-                if let image {
-                    let fly = drawn && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-                    DrawCloseAnimation.play(image, frame: w.frame, level: w.level, fly: fly)
+                let drawn = await self.drawHasMarks()
+                if !drawn { self.removeFrost(); w.alphaValue = 0 }
+                let image = await picture
+                if drawn, let image {
+                    DrawCloseAnimation.play(image, frame: w.frame, level: w.level,
+                                            fly: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
                 }
+                self.removeFrost()
+                w.alphaValue = 0
             }
-            // The glass goes at once (clear, frost off); the capture and the save then happen behind it. The screenshot leaves
-            // SnapNow's own windows out anyway, so the drawing is not in it.
-            self.removeFrost()
-            self.editorWindow?.alphaValue = 0
-            try? await Task.sleep(nanoseconds: 60_000_000)      // one frame for the compositor to drop it
-            let shot = await self.screenWithoutOverlay()
+            // 4. Background: the file, then Dart puts the screen under the drawing and saves it (or drops an empty glass).
+            var shot: URL?
+            if let image = await grabbed, let screen { shot = await LiveDraw.writeShot(image, pointSize: screen.frame.size) }
             let finish = { (kept: Bool) in
                 if let shot, !kept { try? FileManager.default.removeItem(at: shot) }
                 SnapLiteNative.shared?.invoke("capturesChanged")
                 self.removeFrost()
-                self.editorWindow?.orderOut(nil)      // out first: restoring the normal Spaces behaviour on a visible window could move it
-                self.restoreWindow()
-                self.editorWindow?.alphaValue = 1
-                self.drawScreen = nil
-                // focus goes back to the app you were in (it is on this Space, so nothing switches); hide() as before when unknown
-                if let prev = self.previousApp, !prev.isTerminated {
-                    prev.activate(options: [])
-                } else {
-                    NSApp.hide(nil)
+                w.orderOut(nil)                   // out first: restoring the normal Spaces behaviour on a visible window could move it
+                // Back to the editor's normal size and style a little later, while SnapNow sits in the background: resizing the
+                // display-sized Flutter view takes the main thread ~40 ms. Skipped if a new session began; every editor or
+                // Library open restores first anyway (Shell.openEditor / showLibrary).
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    if let self, !self.active, !self.leaving { self.restoreWindow() }
                 }
-                self.previousApp = nil
+                w.ignoresMouseEvents = false
+                w.alphaValue = 1
+                self.drawScreen = nil
                 if let s = self.session {
                     let attrs = try? FileManager.default.attributesOfItem(atPath: s.url.path)
                     let unchanged = (attrs?[.modificationDate] as? Date) == s.modified && (attrs?[.size] as? Int) == s.size
@@ -895,6 +923,7 @@ final class LiveDraw {
                 }
                 self.session = nil
                 self.leaving = false
+                if self.openWhenDone { self.openWhenDone = false; self.enter() }
             }
             if let invoker = SnapLiteNative.shared {
                 invoker.invoke("closeDraw", shot?.path) { result in finish((result as? Bool) ?? false) }

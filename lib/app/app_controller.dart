@@ -112,9 +112,8 @@ class AppController with TrayListener, WindowListener {
     if (!await windowManager.isVisible()) await windowManager.show();
     await libraryKey.currentState?.openDraw(path);
     editorKey.currentState?.armCursorKick();
-    // Two frames: the one that lays out the new glass and the one that paints it, so the window never fades in on the
-    // previous session's picture (it keeps its last frame while hidden).
-    await WidgetsBinding.instance.endOfFrame;
+    // The frame that paints the new, empty glass has to be on screen before the window fades in: it keeps its last frame
+    // (the previous session's picture) while hidden. One frame after the new glass is in place is enough.
     await WidgetsBinding.instance.endOfFrame;
     await Native.drawReady();
   }
@@ -136,7 +135,6 @@ class AppController with TrayListener, WindowListener {
   Future<void> openEditor(String path) async {
     await _show();
     _closePushedPages();
-    editorKey.currentState?.closeGifPreview(); // a new capture takes over from the GIF being shown
     await libraryKey.currentState?.openForEditing(path, fresh: true); // a capture that just happened
   }
 
@@ -176,12 +174,10 @@ class AppController with TrayListener, WindowListener {
     if (await libraryKey.currentState?.confirmDiscard() ?? true) await windowManager.hide();
   }
 
-  /// Esc: saves any edits without asking (unlike ⌘W), then hides the window; with the copied GIF
-  /// playing over the editor it only closes that preview.
+  /// Esc: saves any edits without asking (unlike ⌘W), then hides the window.
   Future<void> saveAndClose() async {
     if (drawing) return;                           // Esc never leaves draw mode (it would lose the drawing); double-tap ⌥ or ⌘W does
     final editor = editorKey.currentState;
-    if (editor?.closeGifPreview() ?? false) return;
     if (editor != null && editor.hasUnsavedChanges) await editor.save();
     await windowManager.hide();
   }

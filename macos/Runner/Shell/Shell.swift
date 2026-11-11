@@ -691,6 +691,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     }
 
     @objc func showLibrary() {
+        if !LiveDraw.shared.active { LiveDraw.shared.restoreWindow() }   // never open at the full-screen draw-mode size
         NSApp.activate()
         SnapLiteNative.shared?.invoke("showLibrary")
     }

@@ -240,20 +240,16 @@ void main() {
     expect(BuildUpGif.fps, 15, reason: 'the frame rate chosen in Settings');
     addTearDown(() => BuildUpGif.fps = 50);
     await tester.pump();
-    final preview = find.byKey(const ValueKey('snaplite-gif-preview'));
-    expect(preview, findsOneWidget, reason: 'the copied GIF plays on screen');
-    await tester.tap(preview);
-    await tester.pump();
-    expect(preview, findsNothing, reason: 'a click closes it');
+    // ⇧⌘C only copies: no preview card or banner over the canvas, no file outside the temp folder
+    expect(find.byKey(const ValueKey('snaplite-gif-preview')), findsNothing, reason: 'no banner over the canvas');
+    expect(find.textContaining('Copied as animated GIF'), findsNothing);
+    expect(copiedGifs.single, startsWith(Directory.systemTemp.path), reason: 'the GIF file is a temp file, never a capture');
+    expect(copiedGifs.single, isNot(contains('/Pictures/')));
+    expect(find.byKey(const ValueKey('snaplite-canvas')), findsOneWidget);
 
     await press(shift: true);
-    await tester.pump();
-    expect(preview, findsOneWidget);
-    await tester.runAsync(() => tester.sendKeyEvent(LogicalKeyboardKey.escape));
-    await tester.pump();
-    expect(preview, findsNothing, reason: 'Esc closes the preview');
-    expect(hides, 0, reason: 'Esc leaves the editor open');
-    expect(find.byKey(const ValueKey('snaplite-canvas')), findsOneWidget);
+    expect(copiedGifs.length, 2);
+    expect(hides, 0, reason: 'copying leaves the editor open');
 
     await press(shift: false);
     expect(pngCopies, 1, reason: '⌘C is unchanged');
