@@ -15,6 +15,8 @@ enum Prefs {
     static let liveDrawGlass = "liveDrawGlass"
     /// Lifting draw mode plays a short closing animation: the markup flies into the menu bar icon (nothing drawn: a quick fade). Default on.
     static let liveDrawCloseAnimation = "liveDrawCloseAnimation"
+    /// The Matrix rain's shortcut (Settings › Shortcuts, default ⌃⌥⇧⌘M) is live. Default on. The menu item works either way.
+    static let matrixRain = "matrixRain"
     static let glassChoices: [(label: String, value: Int)] = [("100% glass (clear)", 100), ("75% glass", 75), ("50% glass", 50),
                                                                  ("25% glass", 25), ("0% (solid)", 0)]
     static var glassLevel: Int {
@@ -146,6 +148,8 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(row("Glass", glass))
         stack.addArrangedSubview(checkbox("Closing animation (the drawing flies into the menu bar icon)", on: Prefs.onByDefault(Prefs.liveDrawCloseAnimation),
                                           action: #selector(prefToggled(_:)), key: Prefs.liveDrawCloseAnimation))
+        stack.addArrangedSubview(checkbox("Matrix rain (\(Shortcuts.get(.matrix)?.display ?? "no shortcut"); change it under Shortcuts)", on: Prefs.onByDefault(Prefs.matrixRain),
+                                          action: #selector(prefToggled(_:)), key: Prefs.matrixRain))
         stack.addArrangedSubview(note("Double-tap Option lays this over your screen to draw on. 100% is clear frosted glass; lower values tint the toolbar and panel, down to solid."))
 
         // Toolbar
@@ -248,7 +252,7 @@ final class SettingsWindowController: NSWindowController {
         // Shortcuts
         stack.addArrangedSubview(separator())
         stack.addArrangedSubview(heading("Shortcuts"))
-        stack.addArrangedSubview(note("Click a shortcut, then press the new keys (with ⌃, ⌥ or ⌘). Delete clears it, Esc cancels."))
+        stack.addArrangedSubview(note("Click a shortcut, then press the new keys (with ⌃, ⌥ or ⌘; Matrix rain also takes ⇧+key or a bare key). Delete clears it, Esc cancels."))
         // Plain rows, not an NSGridView: inside the scrolled Settings the grid drew only one of its
         // columns at a time on the 14" (labels without buttons, then checkboxes without labels,
         // "sometimes"), so each row is a horizontal stack with fixed column widths.
@@ -269,6 +273,7 @@ final class SettingsWindowController: NSWindowController {
             what.textColor = enabled ? Theme.dimText : Theme.muted
             what.widthAnchor.constraint(equalToConstant: labelWidth).isActive = true
             let recorder = ShortcutRecorder()
+            recorder.allowsPlain = action == .matrix
             recorder.widthAnchor.constraint(equalToConstant: 110).isActive = true
             recorder.shortcut = Shortcuts.get(action)
             recorder.isEnabled = enabled
@@ -280,6 +285,17 @@ final class SettingsWindowController: NSWindowController {
             row.spacing = 12
             row.alignment = .centerY
             keys.addArrangedSubview(row)
+            if action == .matrix {                       // which of the two ways the rain's key works
+                let mode = Shortcuts.get(.matrix).map { $0.matrixTrigger } ?? .off
+                let hint = NSTextField(labelWithString: mode.hint)
+                hint.font = Theme.font(11)
+                hint.textColor = Theme.muted
+                let indent = NSView()
+                indent.widthAnchor.constraint(equalToConstant: 30).isActive = true
+                let hintRow = NSStackView(views: [indent, hint])
+                hintRow.spacing = 0
+                keys.addArrangedSubview(hintRow)
+            }
         }
         stack.addArrangedSubview(keys)
         let resetKeys = NSButton(title: "Reset Shortcuts", target: self, action: #selector(resetShortcuts))
@@ -403,6 +419,7 @@ final class SettingsWindowController: NSWindowController {
     @objc private func prefToggled(_ sender: NSButton) {
         guard let key = sender.identifier?.rawValue else { return }
         UserDefaults.standard.set(sender.state == .on, forKey: key)
+        if key == Prefs.matrixRain { NotificationCenter.default.post(name: Shortcuts.changed, object: nil) }   // re-registers at once
     }
 
     @objc private func saveAsFormatChosen(_ sender: NSPopUpButton) {
@@ -508,6 +525,8 @@ final class ShortcutRecorder: NSButton {
         didSet { updateTitle() }
     }
     var onChange: ((Shortcut?) -> Void)?
+    /// Also accept a bare key or ⇧+key (the Matrix rain's row; everywhere else they would fire while typing).
+    var allowsPlain = false
     private var recording = false {
         didSet {
             guard recording != oldValue else { return }
@@ -551,7 +570,7 @@ final class ShortcutRecorder: NSButton {
         case 53: finish(nil)                       // Esc cancels
         case 51, 117: finish(.some(nil))           // Delete clears
         default:
-            if let new = Shortcut(event: event) { finish(.some(new)) } else { NSSound.beep() }
+            if let new = Shortcut(event: event, allowPlain: allowsPlain) { finish(.some(new)) } else { NSSound.beep() }
         }
     }
 

@@ -164,6 +164,54 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   /// The properties card: the editor's own setting, and draw mode's separate one (off until opened, so draw mode is one strip).
   bool _drawInspector = false;
+
+  /// Draw mode's tool strip (pref `draw.toolbar`): 'expanded' (the full strip, the first-run default) or 'deflated' (only
+  /// its 6-dot grip, in a small glass pill exactly where the grip sits in the full strip). A double-click on the dots
+  /// toggles; there is no other control for it. The editor's own toolbar is never affected. While deflated the tool stays
+  /// selected and drawing and every tool shortcut work. (Older saved values 'collapsed' and 'closed' read as deflated.)
+  String _drawStrip = 'expanded';
+  bool get _stripDeflated => widget.overlay && _drawStrip == 'deflated';
+  void _toggleDrawStrip() {
+    if (!widget.overlay) return;
+    final next = _drawStrip == 'deflated' ? 'expanded' : 'deflated';
+    setState(() => _drawStrip = next);
+    Native.setString('draw.toolbar', next);
+  }
+
+  /// The strip's dock content in draw mode. Deflated, the full strip stays laid out but invisible and untouchable, and the
+  /// grip pill is pinned to its leading edge with the same padding and border: the dots do not move between the two
+  /// states (top dock: the strip's left end; left dock: its top end). The glass key sits on what is visible, so the frost
+  /// and the brightness sampling get the pill's rect and every click outside it draws.
+  Widget _drawStripDock() {
+    if (!_stripDeflated) return Center(child: KeyedSubtree(key: _glassToolbarKey, child: _tone(_toolbarBright, _toolbar())));
+    return Center(child: Stack(children: [
+      Visibility(visible: false, maintainSize: true, maintainAnimation: true, maintainState: true,
+          child: _tone(_toolbarBright, _toolbar(ghost: true))),
+      Positioned.fill(child: Align(
+        alignment: _toolbarLeft ? Alignment.topCenter : Alignment.centerLeft,
+        child: KeyedSubtree(key: _glassToolbarKey, child: _tone(_toolbarBright, _gripPill())),
+      )),
+    ]));
+  }
+
+  /// The deflated strip: the grip alone in a glass pill (padding along the bar as the card's, so the dots line up).
+  Widget _gripPill({bool? vertical, bool ghost = false}) {
+    final down = vertical ?? _toolbarLeft;
+    return GestureDetector(
+      onSecondaryTapUp: ghost ? null : (d) => _showToolbarMenu(d.globalPosition),
+      child: Container(
+        key: ghost ? null : const ValueKey('snaplite-strip-pill'),
+        padding: down ? const EdgeInsets.symmetric(vertical: _ToolbarCard.padding) : const EdgeInsets.symmetric(horizontal: _ToolbarCard.padding),
+        decoration: SnapChrome.of(context).decoration(),
+        child: _ToolbarGrip(
+          key: ghost ? null : const ValueKey('snaplite-strip-grip'),
+          vertical: down, cross: _ToolbarGrip.pillCross,
+          onDrag: _toolbarDragTo, onDrop: _toolbarDragEnd, onCancel: _toolbarDragCancel,
+          onDoubleTap: _toggleDrawStrip,
+        ),
+      ),
+    );
+  }
   bool get _inspectorOn => widget.overlay ? _drawInspector : _inspectorShown;
 
   /// Draw mode starts from the last tool and colour used there (a calm blue the first time), not the editor's red.
@@ -172,8 +220,12 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     final c = int.tryParse(await Native.getString('draw.color') ?? '');
     final tn = await Native.getString('draw.tool');
     final t = Tool.values.where((t) => t.name == tn).firstOrNull;
+    final strip = await Native.getString('draw.toolbar');
     if (!mounted || !widget.overlay) return;
     setState(() {
+      if (strip == 'expanded' || strip == 'deflated' || strip == 'collapsed' || strip == 'closed') {
+        _drawStrip = strip == 'expanded' ? 'expanded' : 'deflated';
+      }
       _color = c != null ? Color(c) : _drawFirstColor;
       if (t != null && const [Tool.arrow, Tool.box, Tool.step, Tool.line, Tool.pen, Tool.text, Tool.callout].contains(t)) _tool = t;
     });
@@ -190,6 +242,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     super.initState();
     _makeBlankCanvas(1200, 800);
     _loadPrefs();
+    if (widget.overlay) _drawRestore(); // built straight into draw mode (normally it arrives there in didUpdateWidget)
     Native.getBool('followDrag').then((on) { if (mounted && on != null) setState(() => _followDrag = on); });
     Native.getString('gifEntrance').then((v) async {
       var e = Entrance.values.where((e) => e.name == v).firstOrNull;
@@ -2513,7 +2566,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         Positioned.fill(child: state == null ? const Center(child: CircularProgressIndicator()) : _canvasArea(state)),
         // The toolbar card, centred in its dock. While its grip is dragged it is invisible (but stays, so the drag goes on):
         // only the copy at the pointer shows. Dimmed instead, it still read as a second strip on draw mode's clear glass.
-        dock(_toolbarLeft, Opacity(opacity: dragging ? 0 : 1, child: Center(child: KeyedSubtree(key: _glassToolbarKey, child: _tone(_toolbarBright, _toolbar()))))),
+        // The KeyedSubtree hugs the card itself (grip included), so the rect sent to the frost and the brightness sampling
+        // is the strip's real shape, the smaller one when it is shrunk.
+        dock(_toolbarLeft, Opacity(opacity: dragging ? 0 : 1, child: _drawStripDock())),
         if (_inspectorOn)
           Positioned(
             top: m,
@@ -2536,7 +2591,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
               left: at.dx - 12, top: m, bottom: m + widget.chromeInsets.bottom,
               child: IgnorePointer(child: Align(
                 alignment: Alignment(-1, (at.dy / math.max(1, c.maxHeight)).clamp(0, 1) * 2 - 1),
-                child: _tone(_toolbarBright, _toolbar(vertical: true, ghost: true)),
+                child: _tone(_toolbarBright, _stripDeflated ? _gripPill(vertical: true, ghost: true) : _toolbar(vertical: true, ghost: true)),
               )),
             )
           else
@@ -2544,7 +2599,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
               top: at.dy - 12, left: m, right: m + inspectorRoom,
               child: IgnorePointer(child: Align(
                 alignment: Alignment((at.dx / math.max(1, c.maxWidth)).clamp(0, 1) * 2 - 1, -1),
-                child: _tone(_toolbarBright, _toolbar(vertical: false, ghost: true)),
+                child: _tone(_toolbarBright, _stripDeflated ? _gripPill(vertical: false, ghost: true) : _toolbar(vertical: false, ghost: true)),
               )),
             ),
         ],
@@ -3219,7 +3274,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final hidden = items.sublist(n);
       final moreActive = hidden.any((i) => i.$1 == barTool.name);
       return GestureDetector(onSecondaryTapUp: (d) => _showToolbarMenu(d.globalPosition), child: _ToolbarCard(vertical: vertical, children: [
-        _ToolbarGrip(vertical: vertical, onDrag: _toolbarDragTo, onDrop: _toolbarDragEnd, onCancel: _toolbarDragCancel),
+        _ToolbarGrip(
+          key: widget.overlay && !ghost ? const ValueKey('snaplite-strip-grip') : null,
+          vertical: vertical, onDrag: _toolbarDragTo, onDrop: _toolbarDragEnd, onCancel: _toolbarDragCancel,
+          onDoubleTap: widget.overlay ? _toggleDrawStrip : null, // draw mode: double-click the 6 dots to hide / show the tools
+        ),
         if (leading != null) ...[leading, _ToolbarGap(vertical: vertical)],
         for (final i in shown)
           _ToolButton(icon: i.$2, label: i.$3, active: i.$1 == barTool.name, onTap: () => run(i.$1)),
@@ -3259,16 +3318,27 @@ class _ToolbarCard extends StatelessWidget {
       );
 }
 
-/// The grip at the start of the toolbar: drag it to the top or the left edge of the window to dock the
-/// toolbar there (the editor lights up the dock under the pointer and moves the card on release).
+/// The grip at the start of the toolbar (the 6 dots): drag it to the top or the left edge of the window to dock the
+/// toolbar there (the editor lights up the dock under the pointer and moves the card on release). In draw mode a
+/// double-click on it deflates the strip to just these dots, or brings the tools back ([onDoubleTap]).
+/// Pointer events are read directly, so a click and a drag cannot be confused: a drag starts only once the pointer has
+/// moved more than [dragSlop] from where it went down, and only clicks that never became a drag count towards a
+/// double-click (two within kDoubleTapTimeout and kDoubleTapSlop of each other). A double-click therefore never shows
+/// the ghost or the dock highlight, and a drag never closes the strip.
 class _ToolbarGrip extends StatefulWidget {
   static const extent = 18.0; // along the bar
+  static const dragSlop = 6.0; // px the pointer must move before the grip starts a drag
   static const tooltip = 'Drag to the top or the left edge';
+  static const drawTooltip = 'Double-click to hide / show the tools';
+  static const pillCross = 26.0; // the deflated pill's grip, across the bar
   final bool vertical;
+  final double? cross; // the grip's size across the bar (null: a tool button's)
   final ValueChanged<Offset> onDrag; // the pointer's global position, from the first move on
   final VoidCallback onDrop;
   final VoidCallback onCancel; // the grip went away mid-drag: no end callback will ever come
-  const _ToolbarGrip({required this.vertical, required this.onDrag, required this.onDrop, required this.onCancel});
+  final VoidCallback? onDoubleTap;
+  const _ToolbarGrip({super.key, required this.vertical, required this.onDrag, required this.onDrop, required this.onCancel,
+      this.cross, this.onDoubleTap});
 
   @override
   State<_ToolbarGrip> createState() => _ToolbarGripState();
@@ -3276,15 +3346,68 @@ class _ToolbarGrip extends StatefulWidget {
 
 class _ToolbarGripState extends State<_ToolbarGrip> {
   bool _dragging = false;
+  int? _pointer; // the primary-button pointer being followed
+  Offset? _downAt; // where it went down (global)
+  Duration? _lastClickAt; // the last click that did not become a drag (event time)
+  Offset? _lastClickPos;
 
   @override
   void dispose() {
-    // A GestureDetector disposed mid-drag calls neither onPanEnd nor onPanCancel, which left the toolbar's ghost copy stuck on screen
+    // A grip disposed mid-drag never gets its pointer up, which left the toolbar's ghost copy stuck on screen
     if (_dragging) {
       final cancel = widget.onCancel;
       WidgetsBinding.instance.addPostFrameCallback((_) => cancel());
     }
     super.dispose();
+  }
+
+  void _down(PointerDownEvent e) {
+    // A real button-down only (a two-finger trackpad swipe comes as pan-zoom events and never reaches here)
+    if (e.buttons != kPrimaryButton || _pointer != null) return;
+    _pointer = e.pointer;
+    _downAt = e.position;
+    _dragging = false;
+  }
+
+  void _move(PointerMoveEvent e) {
+    if (e.pointer != _pointer) return;
+    if (!_dragging) {
+      if ((e.position - _downAt!).distance <= _ToolbarGrip.dragSlop) return;
+      _dragging = true;
+      _lastClickAt = null; // a drag breaks any double-click in progress
+      widget.onDrag(_downAt!);
+    }
+    widget.onDrag(e.position);
+  }
+
+  void _up(PointerUpEvent e) {
+    if (e.pointer != _pointer) return;
+    _pointer = null;
+    if (_dragging) {
+      _dragging = false;
+      widget.onDrop();
+      return;
+    }
+    // a click: the second one in time and place is a double-click
+    final last = _lastClickAt, lastPos = _lastClickPos;
+    if (widget.onDoubleTap != null && last != null && lastPos != null &&
+        e.timeStamp - last >= Duration.zero && e.timeStamp - last <= kDoubleTapTimeout &&
+        (e.position - lastPos).distance <= kDoubleTapSlop) {
+      _lastClickAt = null;
+      widget.onDoubleTap!();
+    } else {
+      _lastClickAt = e.timeStamp;
+      _lastClickPos = e.position;
+    }
+  }
+
+  void _cancel(PointerCancelEvent e) {
+    if (e.pointer != _pointer) return;
+    _pointer = null;
+    if (_dragging) {
+      _dragging = false;
+      widget.onCancel();
+    }
   }
 
   @override
@@ -3293,19 +3416,17 @@ class _ToolbarGripState extends State<_ToolbarGrip> {
     final color = Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.55);
     return MouseRegion(
       cursor: SystemMouseCursors.grab,
-      child: GestureDetector(
+      child: Listener(
         behavior: HitTestBehavior.opaque,
-        // A real button-down drag only: a two-finger trackpad swipe over the grip also reads as a pan (offset by the swipe), and its end can go missing
-        supportedDevices: const {PointerDeviceKind.mouse, PointerDeviceKind.touch, PointerDeviceKind.stylus},
-        onPanStart: (d) { _dragging = true; widget.onDrag(d.globalPosition); },
-        onPanUpdate: (d) => widget.onDrag(d.globalPosition),
-        onPanEnd: (_) { _dragging = false; widget.onDrop(); },
-        onPanCancel: () { _dragging = false; widget.onDrop(); },
+        onPointerDown: _down,
+        onPointerMove: _move,
+        onPointerUp: _up,
+        onPointerCancel: _cancel,
         child: Tooltip(
-          message: _ToolbarGrip.tooltip,
+          message: widget.onDoubleTap != null ? _ToolbarGrip.drawTooltip : _ToolbarGrip.tooltip,
           child: SizedBox(
-            width: vertical ? _ToolButton.width : _ToolbarGrip.extent,
-            height: vertical ? _ToolbarGrip.extent : _ToolButton.height,
+            width: vertical ? (widget.cross ?? _ToolButton.width) : _ToolbarGrip.extent,
+            height: vertical ? _ToolbarGrip.extent : (widget.cross ?? _ToolButton.height),
             child: RotatedBox(quarterTurns: vertical ? 1 : 0, child: Icon(Icons.drag_indicator, size: 16, color: color)),
           ),
         ),

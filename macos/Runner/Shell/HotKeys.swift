@@ -6,15 +6,16 @@ struct Shortcut: Codable, Equatable {
     var keyCode: Int
     var modifiers: Int
 
-    /// From a key press; nil unless it includes ⌃, ⌥ or ⌘ (a bare key would fire while typing).
-    init?(event: NSEvent) {
+    /// From a key press; nil unless it includes ⌃, ⌥ or ⌘ (a bare key would fire while typing). `allowPlain`: also a bare
+    /// key or ⇧+key (the Matrix rain's row only, which watches for those only when nobody is typing).
+    init?(event: NSEvent, allowPlain: Bool = false) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         var carbon = 0
         if flags.contains(.control) { carbon |= controlKey }
         if flags.contains(.option) { carbon |= optionKey }
         if flags.contains(.shift) { carbon |= shiftKey }
         if flags.contains(.command) { carbon |= cmdKey }
-        guard carbon & (controlKey | optionKey | cmdKey) != 0, Self.keyNames[Int(event.keyCode)] != nil else { return nil }
+        guard carbon & (controlKey | optionKey | cmdKey) != 0 || allowPlain, Self.keyNames[Int(event.keyCode)] != nil else { return nil }
         keyCode = Int(event.keyCode)
         modifiers = carbon
     }
@@ -45,6 +46,22 @@ struct Shortcut: Codable, Equatable {
         }
         guard let name = Self.keyNames[keyCode], name.count == 1 else { return ("", []) }
         return (name.lowercased(), mask)
+    }
+
+    /// The same combination, read from any key event (no checks): for comparing with a recorded one.
+    static func of(_ event: NSEvent) -> Shortcut {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var carbon = 0
+        if flags.contains(.control) { carbon |= controlKey }
+        if flags.contains(.option) { carbon |= optionKey }
+        if flags.contains(.shift) { carbon |= shiftKey }
+        if flags.contains(.command) { carbon |= cmdKey }
+        return Shortcut(keyCode: Int(event.keyCode), modifiers: carbon)
+    }
+
+    var matrixTrigger: MatrixTrigger {
+        assert(MatrixTrigger.cmd == cmdKey && MatrixTrigger.shift == shiftKey && MatrixTrigger.option == optionKey && MatrixTrigger.control == controlKey)
+        return MatrixTrigger.mode(keyCode: keyCode, modifiers: modifiers)
     }
 
     /// System shortcuts that must not be taken over.
@@ -81,7 +98,7 @@ struct Shortcut: Codable, Equatable {
 
 /// The global shortcuts, configurable in Settings › Shortcuts.
 enum ShortcutAction: String, CaseIterable {
-    case region, scroll, window, screen, text, record, library
+    case region, scroll, window, screen, text, record, library, matrix
 
     var label: String {
         switch self {
@@ -92,10 +109,14 @@ enum ShortcutAction: String, CaseIterable {
         case .text: return "Copy text"
         case .record: return "Record screen (again to stop)"
         case .library: return "Library"
+        case .matrix: return "Matrix rain (again or Esc stops)"
         }
     }
 
     var defaultShortcut: Shortcut {
+        if self == .matrix {   // ⌃⌥⇧⌘M: a system hotkey, from every app, also while typing; the key is swallowed
+            return Shortcut(keyCode: MatrixTrigger.defaultKeyCode, modifiers: MatrixTrigger.defaultModifiers)
+        }
         let key: Int
         switch self {
         case .region: key = kVK_ANSI_C
@@ -105,6 +126,7 @@ enum ShortcutAction: String, CaseIterable {
         case .text: key = kVK_ANSI_T
         case .record: key = kVK_ANSI_R
         case .library: key = kVK_ANSI_O
+        case .matrix: key = kVK_ANSI_M
         }
         return Shortcut(keyCode: key, modifiers: controlKey | shiftKey)
     }
@@ -127,6 +149,15 @@ enum Shortcuts {
     static func set(_ shortcut: Shortcut?, for action: ShortcutAction) {
         if let data = try? JSONEncoder().encode(shortcut ?? cleared) { UserDefaults.standard.set(data, forKey: key(action)) }
         NotificationCenter.default.post(name: changed, object: nil)
+    }
+
+    /// The rain's old default ⇧M (stored by 1.80.27-1.80.29, or never stored) becomes the new ⌃⌥⇧⌘M; a shortcut the user
+    /// recorded is left alone. Runs once at launch, before the hotkeys are registered.
+    static func migrateMatrixDefault() {
+        let k = key(.matrix)
+        guard let data = UserDefaults.standard.data(forKey: k),
+              let stored = try? JSONDecoder().decode(Shortcut.self, from: data) else { return }   // unset: the new default already
+        if MatrixTrigger.isOldDefault(keyCode: stored.keyCode, modifiers: stored.modifiers) { UserDefaults.standard.removeObject(forKey: k) }
     }
 
     static func resetAll() {

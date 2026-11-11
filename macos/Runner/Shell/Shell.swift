@@ -27,6 +27,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let liveDrawItem = NSMenuItem(title: "Draw Mode (double-tap ⌥)", action: #selector(toggleLiveDraw), keyEquivalent: "")
     private let drawNowItem = NSMenuItem(title: "Start Draw Mode Now", action: #selector(drawNow), keyEquivalent: "")
     private let drawPermItem = NSMenuItem(title: "", action: #selector(fixDrawPermission), keyEquivalent: "")
+    private let matrixItem = NSMenuItem(title: "Matrix Rain", action: #selector(toggleMatrixRain), keyEquivalent: "")
     private let altHandItem = NSMenuItem(title: "Option+Click Hand", action: #selector(toggleAltHand), keyEquivalent: "")
     private let recorder = Recorder()
     private var recordingTimer: Timer?
@@ -49,6 +50,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         defaults.register(defaults: [Prefs.openEditor: true, Prefs.copyImage: false, Prefs.microphone: false, Prefs.altClickHand: true, Prefs.liveDraw: true])
         AltClickHand.shared.start()
         LiveDraw.shared.start()
+        MatrixRain.shared.start()
         NSApp.appearance = Theme.appearance
         // In "Match System", follow light/dark switches while running
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
@@ -73,6 +75,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             self?.popover.performClose(nil)
             self?.showLibrary()
         }
+        Shortcuts.migrateMatrixDefault()
         registerHotKeys()
         NotificationCenter.default.addObserver(self, selector: #selector(registerHotKeys), name: Shortcuts.changed, object: nil)
         // The region picker offers S (scrolling capture) over anything that scrolls
@@ -140,7 +143,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             hotkeysItem.submenu?.addItem(entry)
         }
         menu.addItem(hotkeysItem)
-        for entry in [microphoneItem, altHandItem, liveDrawItem, drawNowItem, drawPermItem, loginItem] {
+        shortcutItems[.matrix] = matrixItem   // shows the rain's shortcut as its key equivalent
+        for entry in [microphoneItem, altHandItem, liveDrawItem, drawNowItem, matrixItem, drawPermItem, loginItem] {
             entry.target = self
             menu.addItem(entry)
         }
@@ -249,8 +253,11 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         altHandItem.state = defaults.bool(forKey: Prefs.altClickHand) ? .on : .off
         liveDrawItem.state = defaults.bool(forKey: Prefs.liveDraw) ? .on : .off
         drawNowItem.title = LiveDraw.shared.active ? "End Draw Mode" : "Start Draw Mode Now"
+        matrixItem.state = MatrixRain.shared.running ? .on : .off
         if let missing = LiveDraw.missingPermission {      // the double-tap cannot hear the key: say so, one click to the right pane
-            drawPermItem.title = "⚠︎ Double-tap ⌥ needs \(missing) — click to allow"
+            // the rain needs it too only when its shortcut is a bare key or ⇧+key (a system hotkey needs no permission)
+            let rainKey = MatrixRain.shared.monitorShortcut.map { " and \($0.display)" } ?? ""
+            drawPermItem.title = "⚠︎ Double-tap ⌥\(rainKey) need\(rainKey.isEmpty ? "s" : "") \(missing) — click to allow"
             drawPermItem.isHidden = false
         } else { drawPermItem.isHidden = true }
 
@@ -331,14 +338,25 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     @objc private func registerHotKeys() {
         HotKeyCenter.shared.unregisterAll()
         Shortcuts.failed.removeAll()
+        MatrixRain.shared.monitorShortcut = nil
         for action in ShortcutAction.allCases {
             guard hotkeyEnabled(action), let shortcut = Shortcuts.get(action) else { continue }
+            if action == .matrix {
+                guard Prefs.onByDefault(Prefs.matrixRain) else { continue }    // Settings › Draw mode › Matrix rain shortcut
+                if shortcut.matrixTrigger == .whenNotTyping {                  // a bare key or ⇧+key: the global monitor
+                    MatrixRain.shared.monitorShortcut = shortcut
+                    continue
+                }
+            }
             let ok = HotKeyCenter.shared.register(shortcut) { [weak self] in self?.perform(action) }
             if !ok {
                 Shortcuts.failed.append(action)
                 NSLog("SnapNow: could not register %@ (another app owns it)", shortcut.display)
             }
+            if action == .matrix { MatrixRain.note("shortcut \(shortcut.display) system hotkey: \(ok ? "registered" : "FAILED (in use by another app)")") }
         }
+        if let m = MatrixRain.shared.monitorShortcut { MatrixRain.note("shortcut \(m.display): key monitor, only when not typing") }
+        else if Shortcuts.get(.matrix) == nil || !Prefs.onByDefault(Prefs.matrixRain) || !hotkeyEnabled(.matrix) { MatrixRain.note("shortcut: none (menu item only)") }
         updateShortcutItems()
     }
 
@@ -351,6 +369,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         case .text: afterDelay { $0.grabText() }
         case .record: toggleRecording()
         case .library: showLibrary()
+        case .matrix: MatrixRain.shared.toggle()
         }
     }
 
@@ -665,6 +684,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     @objc private func toggleOpenEditor() { defaults.set(!defaults.bool(forKey: Prefs.openEditor), forKey: Prefs.openEditor) }
     @objc private func toggleCopyImage() { defaults.set(!defaults.bool(forKey: Prefs.copyImage), forKey: Prefs.copyImage) }
     @objc private func drawNow() { LiveDraw.shared.toggle() }
+    /// The menu toggles the rain directly (no key permission needed; works with or without a shortcut).
+    @objc private func toggleMatrixRain() { MatrixRain.shared.toggle() }
     @objc private func fixDrawPermission() { LiveDraw.openPermissionSettings() }
     @objc private func toggleLiveDraw() { defaults.set(!defaults.bool(forKey: Prefs.liveDraw), forKey: Prefs.liveDraw) }
 

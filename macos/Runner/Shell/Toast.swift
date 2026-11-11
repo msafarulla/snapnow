@@ -539,6 +539,7 @@ final class LiveDraw {
     }
 
     private func enter() {
+        MatrixRain.shared.stop()          // draw mode and the Matrix rain never run together (the rain would cover the glass)
         guard let screen = LiveDraw.targetScreen(), let url = glassCanvas(for: screen) else { return }
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         session = (url, (attrs?[.modificationDate] as? Date) ?? Date(), (attrs?[.size] as? Int) ?? 0)

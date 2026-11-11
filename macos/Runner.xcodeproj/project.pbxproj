@@ -26,6 +26,8 @@
 		18837B033D5B2A30E72D6C6D /* HotKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50F51C57FB6403EA2C829730 /* HotKeys.swift */; };
 		331C80D8294CF71000263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C80D7294CF71000263BE5 /* RunnerTests.swift */; };
 		3357992651D22A08177DD339 /* Toast.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16DC590BFB3D5C26CDBD7C65 /* Toast.swift */; };
+		5A1D0C0FFEE0000000000A01 /* MatrixRain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1D0C0FFEE0000000000A02 /* MatrixRain.swift */; };
+		5A1D0C0FFEE0000000000A03 /* MatrixRainCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1D0C0FFEE0000000000A04 /* MatrixRainCore.swift */; };
 		335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */; };
 		33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC10F02044A3C60003C045 /* AppDelegate.swift */; };
 		33CC10F32044A3C60003C045 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F22044A3C60003C045 /* Assets.xcassets */; };
@@ -78,6 +80,8 @@
 		112460035BE26E2274E76319 /* Pods-Runner.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.profile.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"; sourceTree = "<group>"; };
 		128B222952B0A6E8CDBBD116 /* Shell.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Shell.swift; sourceTree = "<group>"; };
 		16DC590BFB3D5C26CDBD7C65 /* Toast.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Toast.swift; sourceTree = "<group>"; };
+		5A1D0C0FFEE0000000000A02 /* MatrixRain.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MatrixRain.swift; sourceTree = "<group>"; };
+		5A1D0C0FFEE0000000000A04 /* MatrixRainCore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MatrixRainCore.swift; sourceTree = "<group>"; };
 		1ADE0110A89672230E154A9A /* Capture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Capture.swift; sourceTree = "<group>"; };
 		B2C3D4E5F60718293A4B5C6D /* RegionCapture.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RegionCapture.swift; sourceTree = "<group>"; };
 		D4E5F60718293A4B5C6D7E8F /* PermissionGuide.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PermissionGuide.swift; sourceTree = "<group>"; };
@@ -241,6 +245,8 @@
 				128B222952B0A6E8CDBBD116 /* Shell.swift */,
 				6F62BE19F6AC78CB62CC2C41 /* Theme.swift */,
 				16DC590BFB3D5C26CDBD7C65 /* Toast.swift */,
+				5A1D0C0FFEE0000000000A02 /* MatrixRain.swift */,
+				5A1D0C0FFEE0000000000A04 /* MatrixRainCore.swift */,
 				AD5022EDAF9DFD390EB827B8 /* GIFExporter.swift */,
 			);
 			name = Shell;
@@ -500,6 +506,8 @@
 				ABCE6F23C935E7BC0D9CFA7B /* Shell.swift in Sources */,
 				575C43B914B47BCDFD2C04EA /* Theme.swift in Sources */,
 				3357992651D22A08177DD339 /* Toast.swift in Sources */,
+				5A1D0C0FFEE0000000000A01 /* MatrixRain.swift in Sources */,
+				5A1D0C0FFEE0000000000A03 /* MatrixRainCore.swift in Sources */,
 				05EA71004FFA77FBC4B05245 /* GIFExporter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

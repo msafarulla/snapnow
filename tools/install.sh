@@ -41,6 +41,10 @@ config=~/.config/snaplite
 # swapped in, keeping the old app until the new one is in place.
 push_to() {
   local host=$1 ok=""
+  # An offline second Mac is skipped at once (it used to retry for many minutes and block the caller); push later with --push-only
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=6 "$host" true 2>/dev/null; then
+    echo "skipped $host: not reachable (run tools/install.sh --no-build --push-only when it is back)"; return 0
+  fi
   for attempt in $(seq 1 ${SNAPLITE_PUSH_TRIES:-40}); do
     if rsync -a --delete --partial --timeout=20 -e "ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=5" \
          /Applications/SnapNow.app/ "$host:/tmp/SnapNow-staged.app/" 2>/dev/null &&
