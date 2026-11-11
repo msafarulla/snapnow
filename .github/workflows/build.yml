@@ -1,5 +1,6 @@
-# Tests on every push and pull request; builds for macOS, Windows and Linux; a tag like v1.12.0 also
-# publishes those builds as a GitHub Release.
+# Tests on every push and pull request; builds for macOS (Windows and Linux are switched off for now).
+# Every push to main publishes a GitHub Release for the pubspec version if that version has none yet
+# (so a version bump + push is the whole release); a pushed tag like v1.12.0 still works too.
 name: Build
 
 on:
@@ -104,27 +105,46 @@ jobs:
           path: SnapNow-Linux-x64.tar.gz
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     needs: [test, macos]   # Windows and Linux are switched off (if: false above)
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: pubspec.yaml
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           merge-multiple: true
       # The release goes live only once every build is attached: it is created as a draft with the assets,
       # then published, so "releases/latest" (the app's update check) never points at an empty release.
-      # A release that already exists for the tag (made by hand) just gets the assets added.
+      # On a push to main the tag is v<pubspec version>, created on this commit by the release itself; a
+      # version that already has a published release with its build is left alone (pushes without a bump).
+      # A release that already exists for the tag without its build just gets the assets added.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           assets=(SnapNow-macOS.zip)   # add SnapNow-Windows.zip SnapNow-Linux-x64.tar.gz when those jobs are switched back on
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
           else
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "SnapNow ${GITHUB_REF_NAME#v}" \
+            version=$(sed -n 's/^version: \([0-9.]*\)+.*/\1/p' pubspec.yaml)
+            [[ -n "$version" ]] || { echo "no version in pubspec.yaml"; exit 1; }
+            tag="v$version"
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "SnapNow-macOS.zip"; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+            else
+              echo "release $tag already published; nothing to do for this push"
+            fi
+          elif gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "SnapNow ${tag#v}" \
               --generate-notes --draft "${assets[@]}"
-            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
           fi
