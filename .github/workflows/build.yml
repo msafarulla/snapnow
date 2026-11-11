@@ -52,6 +52,7 @@ jobs:
           path: SnapNow-macOS.zip
 
   windows:
+    if: false # macOS-only releases for now (2026-11-11); remove this line to build Windows again
     runs-on: windows-2022 # Visual Studio 2022; Flutter 3.32 doesn't recognise the newer image's Visual Studio
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,6 +77,7 @@ jobs:
           path: SnapNow-Windows.zip
 
   linux:
+    if: false # macOS-only releases for now (2026-11-11); remove this line to build Linux again
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,7 +105,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, macos, windows, linux]
+    needs: [test, macos]   # Windows and Linux are switched off (if: false above)
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -118,7 +120,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=(SnapNow-macOS.zip SnapNow-Windows.zip SnapNow-Linux-x64.tar.gz)
+          assets=(SnapNow-macOS.zip)   # add SnapNow-Windows.zip SnapNow-Linux-x64.tar.gz when those jobs are switched back on
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
           else
