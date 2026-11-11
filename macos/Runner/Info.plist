@@ -28,6 +28,8 @@
 	<string>© Control Alt Shift Technologies</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>SnapNow records your voice with a screen recording when Record Microphone is on.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

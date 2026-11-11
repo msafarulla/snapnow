@@ -67,7 +67,8 @@ class MainFlutterWindow: NSWindow {
     // floats over it, so clicking the full-screen app couldn't send the editor behind. Not at launch, where
     // the window is ordered once and hidden straight away.
     if place != .out { DockPresence.shared.parked = false }
-    if launched && place != .out && !isVisible { DockPresence.shared.becomeRegular() }
+    // Not in draw mode: the glass has to be able to sit on another app's full-screen Space (see LiveDraw.enter)
+    if launched && place != .out && !isVisible && !drawMode { DockPresence.shared.becomeRegular() }
     launched = true
     super.order(place, relativeTo: otherWin)
     hiddenWindowAtLaunch()
@@ -101,10 +102,11 @@ final class DockPresence {
     /// Deferred one turn so a closing or hiding window has left the screen before it's counted.
     func update() {
         DispatchQueue.main.async {
-            let open = self.parked || NSApp.windows.contains { w in
+            // While draw mode is up SnapNow stays a menu bar app (see LiveDraw.enter)
+            let open = !LiveDraw.shared.active && (self.parked || NSApp.windows.contains { w in
                 w.styleMask.contains(.titled) && !(w is NSPanel) && (w.level == .normal || w.level == .floating) // floating = pinned
                     && (w.isVisible || w.isMiniaturized)
-            }
+            })
             let wanted: NSApplication.ActivationPolicy = open ? .regular : .accessory
             if NSApp.activationPolicy() != wanted { NSApp.setActivationPolicy(wanted) }
         }

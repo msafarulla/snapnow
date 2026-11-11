@@ -149,10 +149,23 @@ final class RegionCapture {
         }
     }
 
+    /// Test control: `r` (global Cocoa points) saved to `url` without the picker, from the same frozen screen a click uses.
+    static func captureArea(_ r: CGRect, to url: URL, completion: @escaping (URL?) -> Void) {
+        let capture = RegionCapture()
+        capture.url = url
+        Task { @MainActor in
+            guard await capture.freezeWithScreenCaptureKit(),
+                  let f = capture.frozen.first(where: { $0.screen.frame.contains(CGPoint(x: r.midX, y: r.midY)) }) else { completion(nil); return }
+            completion(capture.save(r.intersection(f.screen.frame), from: f) ? url : nil)
+        }
+    }
+
     /// Each screen's display by ID, at its full pixel size.
     @MainActor private func freezeWithScreenCaptureKit() async -> Bool {
         frozen = []
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return false }
+        let hidden = Recorder.shared.overlayWindowIDs           // a screen recording's pill and border are not captured
+        let recorderWindows = content.windows.filter { hidden.contains($0.windowID) }
         for screen in NSScreen.screens {
             guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
                   let display = content.displays.first(where: { $0.displayID == id }) else { return false }
@@ -162,7 +175,7 @@ final class RegionCapture {
             config.showsCursor = false
             config.captureResolution = .best
             guard let image = try? await SCScreenshotManager.captureImage(
-                contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config),
+                contentFilter: SCContentFilter(display: display, excludingWindows: recorderWindows), configuration: config),
                   !Self.isBlank(image) else { frozen = []; return false }
             frozen.append(Frozen(screen: screen, image: image))
         }
@@ -185,6 +198,8 @@ final class RegionCapture {
     /// every image belongs to a known screen; BMP because it's written in ~0.1 s.
     private func freeze() -> Bool {
         frozen = []
+        let restoreOverlays = Recorder.shared.hideOverlaysForStill()
+        defer { restoreOverlays() }
         let mainHeight = NSScreen.screens.first?.frame.height ?? 0
         for screen in NSScreen.screens {
             let f = screen.frame

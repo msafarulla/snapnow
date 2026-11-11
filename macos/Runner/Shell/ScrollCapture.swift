@@ -69,7 +69,8 @@ enum ScrollCapture {
         if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
            let display = content.displays.first(where: { $0.displayID == id }) {
-            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let hidden = Recorder.shared.overlayWindowIDs     // a screen recording's pill and border are not in the shots
+            let filter = SCContentFilter(display: display, excludingWindows: content.windows.filter { hidden.contains($0.windowID) })
             let config = SCStreamConfiguration()
             config.sourceRect = CGRect(x: area.minX - screen.frame.minX, y: screen.frame.maxY - area.maxY, width: area.width, height: area.height)
             config.width = Int(area.width * scale)
@@ -78,6 +79,8 @@ enum ScrollCapture {
             config.captureResolution = .best
             kit = (filter, config)
         }
+        // screencapture cannot leave single windows out: a recording's pill and border step aside while it shoots
+        let restoreOverlays: () -> Void = kit == nil ? Recorder.shared.hideOverlaysForStill() : {}
         let mainHeight = NSScreen.screens.first?.frame.maxY ?? 0
         let cliRect = CGRect(x: area.minX, y: mainHeight - area.maxY, width: area.width, height: area.height)   // main display, top-left origin
         note("grabber: \(kit == nil ? "screencapture -R" : "ScreenCaptureKit"), scale \(scale)")
@@ -90,6 +93,7 @@ enum ScrollCapture {
         let outline = RegionCapture.showOutline(area)
         let hud = HUD(above: area)
         defer {
+            restoreOverlays()
             outline.orderOut(nil)
             hud.close()
             CGWarpMouseCursorPosition(cg(mouseBefore))

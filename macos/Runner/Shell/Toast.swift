@@ -8,7 +8,8 @@ enum Toast {
     private static var panel: NSPanel?
     private static var hideWork: DispatchWorkItem?
 
-    static func show(_ message: String, symbol: String = "checkmark.circle.fill", detail: String? = nil, footnote: String? = nil) {
+    static func show(_ message: String, symbol: String = "checkmark.circle.fill", detail: String? = nil, footnote: String? = nil,
+                     lasting: Bool = false) {
         panel?.orderOut(nil)
         hideWork?.cancel()
 
@@ -96,7 +97,7 @@ enum Toast {
         p.orderFrontRegardless()
         panel = p
 
-        let duration: TimeInterval = detail == nil ? 1.8 : 4.5
+        let duration: TimeInterval = detail == nil ? (lasting ? 6 : 1.8) : 4.5
         background.onHover = { inside in
             hideWork?.cancel()
             if !inside { scheduleHide(p, after: 1.5) }
@@ -189,7 +190,7 @@ enum CountdownHUD {
         p.hasShadow = true
         p.level = .popUpMenu // above a menu opened during the countdown
         p.ignoresMouseEvents = true
-        p.sharingType = .none // never in a screenshot or recording
+        p.sharingType = .none // kept out of screenshots
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         p.contentView = background
         panel = p
@@ -482,6 +483,8 @@ final class LiveDraw {
     /// The app you were in when draw mode opened: it gets the focus back when the glass is lifted.
     private var previousApp: NSRunningApplication?
     private var session: (url: URL, modified: Date, size: Int)?
+    /// The editor (or Library) was open when draw mode began: it comes back when the glass is lifted (bringBackEditor).
+    private var reopenEditor = false
     private let promptedKey = "liveDraw.promptedAccessibility"
 
     func start() {
@@ -547,6 +550,16 @@ final class LiveDraw {
         previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
         drawScreen = screen
         active = true
+        // An open editor or Library (perhaps on another Space, or stepped aside for a full-screen app) is the window that
+        // becomes the glass: it is taken off its Space first and comes back afterwards. For the session SnapNow is a menu bar
+        // app: a Dock app's window cannot sit on another app's full-screen Space, so the activation below would make macOS
+        // slide to a desktop Space and the glass would cover that one instead of the screen you were looking at.
+        if let w = editorWindow {
+            reopenEditor = reopenEditor || w.isVisible || DockPresence.shared.parked
+            if w.isVisible { w.orderOut(nil) }
+        }
+        DockPresence.shared.parked = false
+        if NSApp.activationPolicy() != .accessory { NSApp.setActivationPolicy(.accessory) }
         // Dart starts on the new empty glass at once, in parallel with the window work below. Its replies to the main thread
         // (isVisible, drawReady) are handled only after enter() returns, so they always find the window on screen on this Space.
         glassShown = false
@@ -558,8 +571,9 @@ final class LiveDraw {
         editorWindow?.orderFrontRegardless()
         takeFocus()
         // Invisible until Dart reports the new, empty glass painted (drawReady -> revealGlass): until Flutter paints a frame
-        // the window still shows its last one, the drawing of the previous session. Fallback if the report never comes.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.revealGlass() }
+        // the window still shows its last one (the previous session's drawing, or the open editor with its opaque backdrop).
+        // Fallback if the report never comes; Dart may first save the open picture's edits, so it waits a while.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.revealGlass() }
         startSampling()                   // brightness sampling (adaptive icon colour) starts after the window work
         for delay in [0.3, 0.8] {         // once more after Flutter shows it, in case the window manager resized it
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in if self?.active == true { self?.expand() } }
@@ -731,6 +745,28 @@ final class LiveDraw {
         w.setFrame(saved.frame, display: true, animate: false)
         w.collectionBehavior = saved.spaces
         self.saved = nil
+    }
+
+    /// The editor or Library that was open when draw mode began, back as it was (Dart reopens its picture): just behind the
+    /// app you are in, or, when that app fills the screen (full screen), waiting in the Dock and ⌘-Tab as when the editor
+    /// steps aside for a full-screen app, shown when SnapNow is switched to.
+    private func bringBackEditor() {
+        guard reopenEditor, let w = editorWindow, !w.isVisible else { reopenEditor = false; return }
+        reopenEditor = false
+        let me = ProcessInfo.processInfo.processIdentifier
+        let centre = CGPoint(x: w.frame.midX, y: w.frame.midY)
+        let screen = (NSScreen.screens.first { $0.frame.contains(centre) } ?? NSScreen.main)?.frame ?? .zero
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let front = list.first { ($0[kCGWindowLayer as String] as? Int) == 0 && ($0[kCGWindowOwnerPID as String] as? pid_t) != me }
+        let bounds = (front?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+        if let b = bounds, b.width >= screen.width, b.height >= screen.height * 0.85 {
+            DockPresence.shared.parked = true
+            DockPresence.shared.update()
+        } else if let number = front?[kCGWindowNumber as String] as? Int {
+            w.order(.below, relativeTo: number)
+        } else {
+            w.orderBack(nil)
+        }
     }
 
     /// ⌘W / the editor's close while in draw mode.
@@ -912,7 +948,7 @@ final class LiveDraw {
                 // display-sized Flutter view takes the main thread ~40 ms. Skipped if a new session began; every editor or
                 // Library open restores first anyway (Shell.openEditor / showLibrary).
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                    if let self, !self.active, !self.leaving { self.restoreWindow() }
+                    if let self, !self.active, !self.leaving { self.restoreWindow(); self.bringBackEditor() }
                 }
                 w.ignoresMouseEvents = false
                 w.alphaValue = 1
@@ -963,7 +999,7 @@ enum DrawCloseAnimation {
         w.backgroundColor = .clear
         w.hasShadow = false
         w.ignoresMouseEvents = true          // clicks and typing go to the apps underneath while it plays
-        w.sharingType = .none
+        w.sharingType = Recorder.shared.isRecording ? .readOnly : .none   // out of screenshots, but part of a screen recording
         w.level = level
         w.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
         let view = NSView(frame: NSRect(origin: .zero, size: frame.size))

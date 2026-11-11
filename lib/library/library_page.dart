@@ -106,7 +106,18 @@ class LibraryPageState extends State<LibraryPage> {
   /// Draw mode (double-tap Option): the editor alone, full-window, over the frozen screen; no filmstrip, no Library button.
   bool _draw = false;
 
+  /// What the window showed when draw mode began (the grid, or the editor on a picture): it comes back afterwards.
+  ({bool editing, String? path})? _beforeDraw;
+  /// That picture being loaded back (closeDraw): a new draw session waits for it, so it can never land on the glass.
+  Future<void>? _restoring;
+
   Future<void> openDraw(String path) async {
+    if (!_draw) {
+      await _restoring;
+      _restoring = null;
+      _beforeDraw = (editing: _editing, path: _editingPath);
+      await confirmDiscard(); // the glass takes over the editor: the open picture's edits are saved first, as on any switch
+    }
     setState(() { _draw = true; _editing = true; _editingPath = path; });
     await WidgetsBinding.instance.endOfFrame;
     await _editor?.openFile(path, fresh: true);
@@ -117,8 +128,19 @@ class LibraryPageState extends State<LibraryPage> {
   /// mode are how it is kept.
   void closeDraw() {
     if (!_draw) return;
+    final before = _beforeDraw;
+    _beforeDraw = null;
+    final back = before != null && before.editing && before.path != null && File(before.path!).existsSync() ? before.path : null;
     setState(() { _draw = false; _editing = false; _editingPath = null; });
     _reload();
+    if (back != null) _restoring = _restore(back); // the picture that was open before draw mode, as it was
+  }
+
+  /// Straight into the editor, without waiting for a frame: the window is usually hidden now and paints none.
+  Future<void> _restore(String path) async {
+    setState(() { _editing = true; _editingPath = path; });
+    await _editor?.openFile(path);
+    _scrollFilmstripTo(path);
   }
 
   /// Enters (or switches within) edit mode, saving any unsaved edits first.

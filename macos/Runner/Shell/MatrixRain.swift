@@ -6,7 +6,7 @@ import QuartzCore
 /// or the menu's Matrix Rain turns cmatrix's rain on; the shortcut again or Escape turns it off. The same effect and timing as my browser-automation rain
 /// (MatrixColumns, a port of cmatrix): every second column, a white head, a green tail, 40 ms a frame, over a light black
 /// wash so the screen stays visible. One borderless, click-through window per display above everything (screen-saver
-/// level, every Space and over full-screen apps), never in a capture or a recording (sharingType none), never taking
+/// level, every Space and over full-screen apps), never in a capture (sharingType none) but in a screen recording, never taking
 /// focus. Each cell is a layer showing a cached glyph image, and a frame only touches the cells that changed. Off while
 /// the screen is locked or asleep; rebuilt when displays change; never together with draw mode (opening draw mode stops
 /// it, and it does not start while draw mode is up).
@@ -23,6 +23,8 @@ final class MatrixRain {
     /// hotkey (HotKeyCenter answers it), cleared, switched off, or paused by the menu's hotkey mode. Set by Shell.registerHotKeys
     /// whenever the shortcuts change, so a new one works at once and the old one is gone.
     var monitorShortcut: Shortcut?
+    /// Out of captures and screenshots, but in a screen recording while one runs (it is part of what you see).
+    static var sharing: NSWindow.SharingType { Recorder.shared.isRecording ? .readOnly : .none }
     static let washAlpha: CGFloat = 0.5            // "background can slightly become black" (as the browser rain)
 
     /// Global and local key monitors (the same Accessibility / Input Monitoring permissions as draw mode's double-tap).
@@ -43,6 +45,9 @@ final class MatrixRain {
         on(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { [weak self] in
             guard let self, self.running else { return }
             self.buildScreens()
+        }
+        on(NotificationCenter.default, Recorder.recordingChanged) { [weak self] in
+            self?.screens.forEach { $0.window.sharingType = MatrixRain.sharing }
         }
     }
 
@@ -177,7 +182,7 @@ private final class RainScreen {
         w.ignoresMouseEvents = true                 // every click and scroll goes to the apps underneath
         w.level = .screenSaver                      // above normal windows, the menu bar, the Dock and full-screen apps
         w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        w.sharingType = .none                       // never in a SnapNow capture, a screenshot or a screen recording
+        w.sharingType = MatrixRain.sharing          // never in a SnapNow capture or a screenshot; in a screen recording, yes
         w.animationBehavior = .none
         let view = NSView(frame: NSRect(origin: .zero, size: size))
         view.wantsLayer = true

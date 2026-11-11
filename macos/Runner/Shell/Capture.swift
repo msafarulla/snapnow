@@ -70,16 +70,19 @@ enum Capture {
         }
         args.append(url.path)
 
+        // During a screen recording its pill and border step aside: screencapture cannot leave single windows out
+        let restoreOverlays = Recorder.shared.hideOverlaysForStill()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         process.arguments = args
         process.terminationHandler = { _ in
             let captured = FileManager.default.fileExists(atPath: url.path)
-            DispatchQueue.main.async { completion(captured ? url : nil) }
+            DispatchQueue.main.async { restoreOverlays(); completion(captured ? url : nil) }
         }
         do {
             try process.run()
         } catch {
+            restoreOverlays()
             completion(nil)
         }
     }

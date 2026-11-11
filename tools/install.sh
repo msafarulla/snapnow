@@ -36,6 +36,15 @@ export PATH=/opt/homebrew/bin:$HOME/.gem/bin:$PATH
 app=build/macos/Build/Products/Release/SnapNow.app
 config=~/.config/snaplite
 
+# SnapNow names a recording in progress in this marker (its pid and the movie); restarting the app would cut
+# that recording short, so an install leaves a running app alone while the marker's process is alive.
+marker=${SNAPNOW_RECORDING_MARKER:-"$HOME/Library/Application Support/SnapNow/recording.active"}   # the override is for tests
+recording_running() {
+  [[ -f $marker ]] || return 1
+  local pid; pid=$(plutil -extract pid raw -o - "$marker" 2>/dev/null) || return 1
+  [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null && [[ $(ps -p "$pid" -o comm= 2>/dev/null) == *SnapNow* ]]
+}
+
 # Copies the installed app to `host` safely, even over a connection that keeps dropping: rsync resumes
 # where it stopped (each attempt adds to the copy), the copy's signature is checked, and only then is it
 # swapped in, keeping the old app until the new one is in place.
@@ -54,7 +63,11 @@ push_to() {
     echo "copy to $host interrupted (attempt $attempt), resuming…" >&2; sleep 15
   done
   [[ -n $ok ]] || { echo "error: could not copy SnapNow to $host; its current app is untouched" >&2; return 1; }
+  local rc=0
   ssh -o BatchMode=yes -o ConnectTimeout=15 "$host" 'set -e
+    m="$HOME/Library/Application Support/SnapNow/recording.active"
+    if [ -f "$m" ]; then p=$(plutil -extract pid raw -o - "$m" 2>/dev/null || true)
+      if [ -n "$p" ] && kill -0 "$p" 2>/dev/null && ps -p "$p" -o comm= | grep -q SnapNow; then exit 3; fi; fi
     pkill -x SnapNow || true; pkill -x SnapLite || true; sleep 1
     rm -rf /Applications/SnapNow.app.old /Applications/SnapLite.app   # SnapLite.app: the name before 1.21
     [ -d /Applications/SnapNow.app ] && mv /Applications/SnapNow.app /Applications/SnapNow.app.old
@@ -62,7 +75,12 @@ push_to() {
     codesign --verify --deep --strict /Applications/SnapNow.app
     rm -rf /Applications/SnapNow.app.old
     open /Applications/SnapNow.app
-    echo "installed on '"$host"': $(defaults read /Applications/SnapNow.app/Contents/Info CFBundleShortVersionString)"'
+    echo "installed on '"$host"': $(defaults read /Applications/SnapNow.app/Contents/Info CFBundleShortVersionString)"' || rc=$?
+  if [[ $rc == 3 ]]; then
+    echo "skipped $host: SnapNow is recording there; the new app is staged in /tmp/SnapNow-staged.app. Run tools/install.sh --no-build --push-only when it has ended" >&2
+    return 0
+  fi
+  return $rc
 }
 
 if [[ " $* " == *" --push-only "* ]]; then # just copy the installed app to the second Mac
@@ -93,6 +111,11 @@ else
 fi
 codesign --verify --deep --strict "$app"
 
+if recording_running; then
+  echo "SnapNow is recording right now: the new build is made and signed but NOT installed, and the running app was not restarted." >&2
+  echo "When the recording has ended, run: tools/install.sh --no-build" >&2
+  exit 3
+fi
 pkill -x SnapNow || true; pkill -x SnapLite || true
 sleep 1
 rm -rf /Applications/SnapNow.app /Applications/SnapLite.app   # SnapLite.app: the name before 1.21

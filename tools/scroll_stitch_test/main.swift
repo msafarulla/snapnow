@@ -11,6 +11,7 @@ enum RegionCapture {
     static func pick(completion: @escaping (CGRect?, NSScreen?) -> Void, fallback: @escaping () -> Void) { completion(nil, nil) }
     static func showOutline(_ r: CGRect) -> NSWindow { NSWindow() }
 }
+final class Recorder { static let shared = Recorder(); var overlayWindowIDs: Set<CGWindowID> { [] }; func hideOverlaysForStill() -> () -> Void { {} } }
 final class PermissionGuide { static let shared = PermissionGuide(); func show() { print("permission guide shown") } }
 
 /// A tall "page": random text-like rows and boxes, with optional sticky header/footer painted over every view.

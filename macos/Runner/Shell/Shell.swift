@@ -29,7 +29,9 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let drawPermItem = NSMenuItem(title: "", action: #selector(fixDrawPermission), keyEquivalent: "")
     private let matrixItem = NSMenuItem(title: "Matrix Rain", action: #selector(toggleMatrixRain), keyEquivalent: "")
     private let altHandItem = NSMenuItem(title: "Option+Click Hand", action: #selector(toggleAltHand), keyEquivalent: "")
-    private let recorder = Recorder()
+    private let recorder = Recorder.shared
+    private var signalSources: [DispatchSourceSignal] = []
+    private var wakeNotice: (String, String)?
     private var recordingTimer: Timer?
     private var countdownTimer: Timer?
     private var shortcutItems: [ShortcutAction: NSMenuItem] = [:]
@@ -45,6 +47,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private var hotkeyModeItems: [HotkeyMode: NSMenuItem] = [:]
     private let shortcutWarning = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var busy = false   // a capture, countdown or region pick is in progress
+    private var recordItem: NSMenuItem!
 
     func start() {
         defaults.register(defaults: [Prefs.openEditor: true, Prefs.copyImage: false, Prefs.microphone: false, Prefs.altClickHand: true, Prefs.liveDraw: true])
@@ -95,6 +98,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             self.showIdleIcon()
         }
         ScheduledCapture.shared.resumeIfRunning()
+        setUpRecorder()
     }
 
     // MARK: - Menus
@@ -115,7 +119,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         menu.addItem(delayed)
         menu.addItem(item("Capture Scrolling Area", #selector(captureScrolling), shortcut: .scroll))
         menu.addItem(item("Copy Text…", #selector(grabText), shortcut: .text))
-        menu.addItem(item("Record Screen…", #selector(startRecordingFromMenu), shortcut: .record))
+        recordItem = item("Record Screen…", #selector(startRecordingFromMenu), shortcut: .record)
+        menu.addItem(recordItem)
         menu.addItem(ScheduledCapture.shared.menuItem())
         shortcutWarning.isEnabled = false
         menu.addItem(shortcutWarning)
@@ -253,6 +258,9 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         altHandItem.state = defaults.bool(forKey: Prefs.altClickHand) ? .on : .off
         liveDrawItem.state = defaults.bool(forKey: Prefs.liveDraw) ? .on : .off
         drawNowItem.title = LiveDraw.shared.active ? "End Draw Mode" : "Start Draw Mode Now"
+        // During a recording the same item stops it; every other item works as usual
+        recordItem.title = recorder.isRecording ? "Stop Recording" : "Record Screen…"
+        recordItem.action = recorder.isRecording ? #selector(stopRecording) : #selector(startRecordingFromMenu)
         matrixItem.state = MatrixRain.shared.running ? .on : .off
         if let missing = LiveDraw.missingPermission {      // the double-tap cannot hear the key: say so, one click to the right pane
             // the rain needs it too only when its shortcut is a bare key or ⇧+key (a system hotkey needs no permission)
@@ -295,6 +303,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     }()
 
     private func showIdleIcon() {
+        if recorder.isRecording { updateRecordingTime(); return }   // e.g. after a capture's countdown during a recording
         // While scheduled screenshots run, the icon says so
         statusItem.button?.image = ScheduledCapture.shared.isRunning
             ? NSImage(systemSymbolName: "camera.badge.clock", accessibilityDescription: "Scheduled screenshots running") ?? Self.idleIcon
@@ -392,7 +401,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     }
 
     private func scrollCapture(area: CGRect?) {
-        guard !busy, !recorder.isRecording, hasPermission() else { ScrollCapture.note("not started: busy \(busy), recording \(recorder.isRecording)"); return }
+        guard !busy, hasPermission() else { ScrollCapture.note("not started: busy \(busy)"); return }
         busy = true
         ScrollCapture.start(area: area, sound: CaptureConfig.current.captureSound) { [weak self] url in
             self?.busy = false
@@ -417,11 +426,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     // MARK: - Status item and panel
 
+    /// The same during a recording as at any other time (Stop is in the recording's pill and in the menu).
     @objc private func statusClicked() {
-        if recorder.isRecording {
-            stopRecording()
-            return
-        }
         let event = NSApp.currentEvent
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
             popover.performClose(nil)
@@ -491,7 +497,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     /// `delay`: for a region, pick the area first, then count down and capture it.
     func capture(_ mode: CaptureMode, cursor: Bool = false, delay: Int = 0) {
-        guard !busy, !recorder.isRecording, hasPermission() else { return }
+        guard !busy, hasPermission() else { return }
         busy = true
         let config = CaptureConfig.current
         Capture.run(mode, cursor: cursor, windowShadow: config.windowShadow, sound: config.captureSound, delay: delay) { [weak self] url in
@@ -539,7 +545,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     /// Counts down on screen and in the menu bar (time to open a menu or hover something), then runs `action`.
     private func countdown(_ seconds: Int, then action: @escaping () -> Void) {
-        guard !busy, !recorder.isRecording, hasPermission() else { return }
+        guard !busy, hasPermission() else { return }
         busy = true
         var remaining = seconds
         showCountdown(remaining)
@@ -563,7 +569,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     /// Region capture straight to OCR; the text goes to the clipboard and the image is thrown away.
     @objc func grabText() {
-        guard !busy, !recorder.isRecording, hasPermission() else { return }
+        guard !busy, hasPermission() else { return }
         busy = true
         let temp = Capture.uniqueURL(in: Capture.cacheFolder, base: "grab-text")
         Capture.run(.region, to: temp, sound: CaptureConfig.current.captureSound) { [weak self] url in
@@ -615,17 +621,21 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     }
 
     /// Full screen records the screen under the mouse; otherwise the user drags an area first.
+    /// One recording at a time: a second one is refused; everything else works as usual while one runs.
     private func startRecording(fullScreen: Bool) {
-        guard !busy, !recorder.isRecording, hasPermission() else { return }
+        if recorder.isRecording || recorder.isFinishing {
+            Toast.show("Already recording", symbol: "record.circle.fill", footnote: "Stop it with Stop on the recording's bar or in the menu.")
+            return
+        }
+        guard !busy, hasPermission() else { return }
         busy = true
         let begin = { [weak self] (rect: CGRect) in
             guard let self else { return }
             self.busy = false
             let config = CaptureConfig.current
-            let started = self.recorder.start(rect: rect, microphone: config.microphone, showClicks: config.showClicks) { movie in
-                self.recordingFinished(movie)
+            self.recorder.start(rect: rect, microphone: config.microphone, showClicks: config.showClicks) { started in
+                if started { self.showRecordingState() }
             }
-            if started { self.showRecordingState() }
         }
         if fullScreen {
             let mouse = NSEvent.mouseLocation
@@ -643,39 +653,130 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         }
     }
 
-    /// While recording, the menu bar icon is a red stop button with the elapsed time.
+    /// While recording, the menu bar icon is red with the length of the movie written so far; a click on it still
+    /// opens the panel (right click: the menu) as usual.
     private func showRecordingState() {
-        popover.performClose(nil)   // a click on the icon now stops the recording (see statusClicked)
-        statusItem.button?.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "Stop recording")
-        statusItem.button?.contentTintColor = .systemRed
-        statusItem.button?.imagePosition = .imageLeading
         updateRecordingTime()
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.updateRecordingTime() }
+        recordingTimer?.invalidate()
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.updateRecordingTime() }
     }
 
+    /// The time is what has really been written; when nothing is, the icon says so instead of counting on.
     private func updateRecordingTime() {
-        let seconds = Int(Date().timeIntervalSince(recorder.startedAt ?? Date()))
-        statusItem.button?.title = String(format: " %d:%02d", seconds / 60, seconds % 60)
+        guard countdownTimer?.isValid != true else { return }   // a capture's countdown has the icon for now
+        let stalled = recorder.health == .stalled
+        statusItem.button?.imagePosition = .imageLeading
+        statusItem.button?.image = NSImage(systemSymbolName: stalled ? "exclamationmark.triangle.fill" : "record.circle.fill",
+                                           accessibilityDescription: stalled ? "Not recording" : "Recording")
+        statusItem.button?.contentTintColor = stalled ? .systemOrange : .systemRed
+        statusItem.button?.title = stalled ? " Not recording" : " " + Recorder.clock(recorder.elapsed)
     }
 
     @objc private func stopRecording() {
         recorder.stop()
     }
 
-    private func recordingFinished(_ movie: URL?) {
+    // MARK: - Test control (see RecorderTestControl)
+
+    /// A left click on the menu bar icon.
+    func testIconClick() { statusClicked() }
+
+    /// A region capture of `rect` (global points) without the picker: the same frozen screen, crop and after-capture steps.
+    func testRegionCapture(_ rect: CGRect) {
+        guard !busy, hasPermission() else { return }
+        busy = true
+        RegionCapture.captureArea(rect, to: Capture.newCaptureURL()) { [weak self] url in
+            self?.busy = false
+            if let url { self?.handleCapture(url) }
+        }
+    }
+
+    func testScrollCapture(_ rect: CGRect) { scrollCapture(area: rect) }
+
+    var testStatus: [String: Any] { ["panelShown": popover.isShown, "busy": busy] }
+
+    /// The recorder, the system's goodbyes (quit signals, sleep, power off) and what a previous run left behind.
+    private func setUpRecorder() {
+        recorder.onEvent = { [weak self] event in self?.recorderEvent(event) }
+        // A quit signal (kill, logout, the installer) goes through the normal quit, which finishes the movie first
+        for sig in [SIGTERM, SIGINT, SIGHUP] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { NSApp.terminate(nil) }
+            source.resume()
+            signalSources.append(source)
+        }
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.recorder.stop(reason: .sleep)
+        }
+        workspace.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.recorder.stop(reason: .quit)
+        }
+        workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let notice = self?.wakeNotice else { return }
+            self?.wakeNotice = nil
+            Toast.show(notice.0, symbol: "moon.zzz.fill", footnote: notice.1, lasting: true)
+        }
+        RecorderTestControl.install()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            Task { @MainActor in
+                guard let found = await Recorder.recoverUnfinished() else { return }
+                SnapLiteNative.shared?.invoke("capturesChanged")
+                NSSound(named: "Glass")?.play()
+                Toast.show("Recovered an unfinished recording (\(found.text))", symbol: "arrow.counterclockwise.circle.fill",
+                           footnote: "\(found.url.lastPathComponent) is in the Library.", lasting: true)
+            }
+        }
+    }
+
+    private func recorderEvent(_ event: RecorderEvent) {
+        switch event {
+        case .started:
+            showRecordingState()
+            NSSound(named: "Tink")?.play()
+            Toast.show("Recording started", symbol: "record.circle.fill")
+        case .stalled:
+            updateRecordingTime()
+            NSSound(named: "Funk")?.play()
+            Toast.show("Not recording: nothing new has been written for 5 seconds", symbol: "exclamationmark.triangle.fill", lasting: true)
+        case .resumed:
+            updateRecordingTime()
+            Toast.show("Recording again", symbol: "record.circle.fill")
+        case .finished(let summary, let reason):
+            recordingFinished(summary, reason)
+        case .failed(let summary, let why):
+            recordingTimer?.invalidate()
+            recordingTimer = nil
+            showIdleIcon()
+            NSSound(named: "Funk")?.play()
+            SnapLiteNative.shared?.invoke("capturesChanged")
+            let kept = summary.map { "What was written (\($0.text)) is in the Library." } ?? "Nothing was written."
+            Toast.show("Recording stopped: \(why)", symbol: "exclamationmark.triangle.fill", footnote: kept, lasting: true)
+        }
+    }
+
+    private func recordingFinished(_ summary: RecordingSummary, _ reason: Recorder.EndReason) {
         recordingTimer?.invalidate()
         recordingTimer = nil
         showIdleIcon()
-        guard let movie else {
-            Toast.show("Recording failed", symbol: "exclamationmark.triangle.fill")
-            return
-        }
         SnapLiteNative.shared?.invoke("capturesChanged")
-        if CaptureConfig.current.openVideoWhenDone {
-            Toast.show("Recording saved. Trim it with ⌘T in QuickTime.", symbol: "video.fill")
-            NSWorkspace.shared.open(movie)
-        } else {
-            Toast.show("Recording saved to the Library", symbol: "video.fill")
+        SnapLiteNative.shared?.invoke("recordingFinished", summary.url.path)
+        let message = "Recording saved (\(summary.text))"
+        switch reason {
+        case .quit:
+            return   // the app is going away
+        case .sleep:
+            wakeNotice = (message, "It ended when the Mac went to sleep. It is in the Library.")
+            return
+        case .user:
+            NSSound(named: "Pop")?.play()
+            if CaptureConfig.current.openVideoWhenDone {
+                Toast.show(message, symbol: "video.fill", footnote: "It is in the Library. Trim it with ⌘T in QuickTime.", lasting: true)
+                NSWorkspace.shared.open(summary.url)
+            } else {
+                Toast.show(message, symbol: "video.fill", footnote: "It is in the Library.", lasting: true)
+            }
         }
     }
 

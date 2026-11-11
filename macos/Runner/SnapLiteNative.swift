@@ -11,7 +11,7 @@ final class SnapLiteNative {
   static weak var shared: SnapLiteNative?
 
   private let channel: FlutterMethodChannel
-  private let recorder = Recorder()
+  private let recorder = Recorder.shared
 
   init(messenger: FlutterBinaryMessenger) {
     channel = FlutterMethodChannel(name: "snaplite/native", binaryMessenger: messenger)
@@ -189,14 +189,16 @@ final class SnapLiteNative {
         result(rect.map { [$0.minX, $0.minY, $0.width, $0.height] })
       }
     case "startRecording":
+      // One recording at a time: a second one is refused before an area is picked
+      guard !recorder.isRecording, !recorder.isFinishing else { result("failed"); return }
       // Pick the area first, then record it; the movie path arrives later via "recordingFinished".
       RegionSelector.select(hint: "Drag the area to record · click for the whole screen · Esc to cancel") { [weak self] rect in
         guard let self, let rect else { result("cancelled"); return }
-        let started = self.recorder.start(rect: rect, microphone: args["microphone"] as? Bool ?? false,
-                                          showClicks: args["showClicks"] as? Bool ?? true) { [weak self] url in
-          self?.channel.invokeMethod("recordingFinished", arguments: url?.path)
+        // The movie path arrives through "recordingFinished", sent by the shell when the recorder reports the end
+        self.recorder.start(rect: rect, microphone: args["microphone"] as? Bool ?? false,
+                            showClicks: args["showClicks"] as? Bool ?? true) { started in
+          result(started ? "started" : "failed")
         }
-        result(started ? "started" : "failed")
       }
     case "stopRecording":
       recorder.stop()
@@ -795,175 +797,6 @@ private final class SelectionView: NSView {
 
   override func keyDown(with event: NSEvent) {
     if event.keyCode == 53 { onFinish?(nil) } else { super.keyDown(with: event) }
-  }
-}
-
-// MARK: - Recorder
-
-/// Screen recording through `screencapture -v`. It records until it gets SIGINT, which also
-/// finalizes the movie (writing to its stdin does not stop it).
-final class Recorder {
-  private var process: Process?
-  private var frame: NSWindow?
-  private var controls: NSPanel?
-  private var controlsTimer: Timer?
-  private(set) var startedAt: Date?
-
-  var isRecording: Bool { process != nil }
-
-  /// `rect` is in Cocoa global coordinates. Completion gets the movie, or nil if nothing was written.
-  func start(rect: CGRect, microphone: Bool, showClicks: Bool = true, completion: @escaping (URL?) -> Void) -> Bool {
-    guard process == nil else { return false }
-    let url = CaptureFiles.newCaptureURL(prefix: "SnapNow Recording", ext: "mov")
-
-    // screencapture -R takes points from the top-left of the main display
-    let mainHeight = NSScreen.screens.first?.frame.height ?? 0
-    let r = CGRect(x: rect.minX, y: mainHeight - rect.maxY, width: rect.width, height: rect.height).integral
-    var args = ["-x", "-v", "-R\(Int(r.minX)),\(Int(r.minY)),\(Int(r.width)),\(Int(r.height))"]
-    if showClicks { args.append("-k") }
-    if microphone { args.append("-g") }
-    args.append(url.path)
-
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-    p.arguments = args
-    p.standardInput = Pipe()
-    p.terminationHandler = { [weak self] _ in
-      DispatchQueue.main.async {
-        self?.process = nil
-        self?.startedAt = nil
-        self?.frame?.orderOut(nil)
-        self?.frame = nil
-        self?.hideControls()
-        completion(FileManager.default.fileExists(atPath: url.path) ? url : nil)
-      }
-    }
-    do {
-      try p.run()
-    } catch {
-      return false
-    }
-    process = p
-    startedAt = Date()
-    showFrame(around: rect)
-    showControls(near: rect)
-    return true
-  }
-
-  func stop() {
-    process?.interrupt()
-  }
-
-  /// A small bar with the elapsed time and a "Stop Recording" button, just outside the recorded area
-  /// when there is room (macOS's own menu bar indicator only offers "Stop Sharing").
-  private func showControls(near rect: CGRect) {
-    let size = NSSize(width: 214, height: 36)
-    let screen = NSScreen.screens.first { $0.frame.intersects(rect) } ?? NSScreen.screens[0]
-    let visible = screen.visibleFrame
-    var origin = NSPoint(x: rect.midX - size.width / 2, y: rect.minY - size.height - 10)   // below
-    if origin.y < visible.minY { origin.y = rect.maxY + 10 }                              // else above
-    if origin.y + size.height > visible.maxY { origin.y = visible.minY + 16 }             // else bottom of screen
-    origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-
-    let panel = NSPanel(contentRect: NSRect(origin: origin, size: size), styleMask: [.borderless, .nonactivatingPanel],
-                        backing: .buffered, defer: false)
-    panel.isOpaque = false
-    panel.backgroundColor = .clear
-    panel.level = .statusBar
-    panel.hasShadow = true
-    panel.sharingType = .none   // keep it out of the recording where macOS honors this
-    panel.collectionBehavior = [.canJoinAllSpaces, .stationary]
-
-    let background = NSView()
-    background.wantsLayer = true
-    background.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.92).cgColor
-    background.layer?.cornerRadius = 10
-    let time = NSTextField(labelWithString: "0:00")
-    time.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-    time.textColor = .white
-    let dot = NSImageView(image: NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "Recording")!)
-    dot.contentTintColor = .systemRed
-    // Drawn by hand: a standard button looks disabled here, since the bar never becomes key
-    let stop = StopButton(title: "Stop Recording", target: self, action: #selector(stopClicked))
-    stop.isBordered = false
-    stop.wantsLayer = true
-    stop.layer?.backgroundColor = NSColor.systemRed.cgColor
-    stop.layer?.cornerRadius = 7
-    stop.image = NSImage(systemSymbolName: "stop.fill", accessibilityDescription: nil)
-    stop.imagePosition = .imageLeading
-    stop.contentTintColor = .white
-    stop.attributedTitle = NSAttributedString(string: " Stop Recording ",
-                                              attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.white])
-    stop.heightAnchor.constraint(equalToConstant: 26).isActive = true
-    stop.widthAnchor.constraint(equalToConstant: 136).isActive = true
-    let stack = NSStackView(views: [dot, time, stop])
-    stack.spacing = 8
-    stack.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 6)
-    stack.translatesAutoresizingMaskIntoConstraints = false
-    background.addSubview(stack)
-    NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-      stack.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-      stack.centerYAnchor.constraint(equalTo: background.centerYAnchor),
-    ])
-    panel.contentView = background
-    panel.orderFrontRegardless()
-    controls = panel
-
-    controlsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-      guard let start = self?.startedAt else { return }
-      let seconds = Int(Date().timeIntervalSince(start))
-      time.stringValue = String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
-  }
-
-  @objc private func stopClicked() {
-    stop()
-  }
-
-  private func hideControls() {
-    controlsTimer?.invalidate()
-    controlsTimer = nil
-    controls?.orderOut(nil)
-    controls = nil
-  }
-
-  /// A red border just outside the recorded area; it is click-through and not in the recording.
-  private func showFrame(around rect: CGRect) {
-    let inset: CGFloat = 3
-    let window = NSWindow(contentRect: rect.insetBy(dx: -inset, dy: -inset), styleMask: .borderless, backing: .buffered, defer: false)
-    window.isOpaque = false
-    window.backgroundColor = .clear
-    window.ignoresMouseEvents = true
-    window.sharingType = .none
-    window.level = .statusBar
-    window.collectionBehavior = [.canJoinAllSpaces, .stationary]
-    window.contentView = FrameView(inset: inset)
-    window.orderFrontRegardless()
-    frame = window
-  }
-}
-
-/// The Stop bar is never key, so its button must take the first click.
-private final class StopButton: NSButton {
-  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
-
-private final class FrameView: NSView {
-  private let inset: CGFloat
-
-  init(inset: CGFloat) {
-    self.inset = inset
-    super.init(frame: .zero)
-  }
-
-  required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-  override func draw(_ dirtyRect: NSRect) {
-    let path = NSBezierPath(rect: bounds.insetBy(dx: inset / 2, dy: inset / 2))
-    path.lineWidth = inset - 1
-    NSColor.systemRed.setStroke()
-    path.stroke()
   }
 }
 
