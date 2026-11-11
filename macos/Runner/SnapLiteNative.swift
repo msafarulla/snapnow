@@ -231,6 +231,9 @@ final class SnapLiteNative {
     case "activate":
       NSApp.activate(ignoringOtherApps: true)
       result(nil)
+    case "drawReady":
+      LiveDraw.shared.revealGlass()
+      result(nil)
     case "displayUnderMouse":
       // screencapture -D numbers displays from 1 in NSScreen.screens order
       let mouse = NSEvent.mouseLocation

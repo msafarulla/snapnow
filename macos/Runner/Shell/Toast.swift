@@ -550,8 +550,11 @@ final class LiveDraw {
         editorWindow?.alphaValue = 0
         editorWindow?.orderFrontRegardless()
         takeFocus()
-        NSAnimationContext.runAnimationGroup { c in c.duration = 0.16; self.editorWindow?.animator().alphaValue = 1 }   // a short fade, not a pop
+        // Invisible until Dart reports the new, empty glass painted (drawReady -> revealGlass): until Flutter paints a frame
+        // the window still shows its last one, the drawing of the previous session. Fallback if the report never comes.
+        glassShown = false
         SnapLiteNative.shared?.invoke("openDraw", url.path)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in self?.revealGlass() }
         for delay in [0.3, 0.8] {         // once more after Flutter shows it, in case the window manager resized it
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in if self?.active == true { self?.expand() } }
         }
@@ -726,6 +729,15 @@ final class LiveDraw {
 
     /// ⌘W / the editor's close while in draw mode.
     func endFromEditor() { if active { leave() } }
+
+    private var glassShown = true
+
+    /// Dart has painted the new session's empty glass (or the fallback fired): fade the window in. Once per session.
+    func revealGlass() {
+        guard active, !leaving, !glassShown, let w = editorWindow else { return }
+        glassShown = true
+        NSAnimationContext.runAnimationGroup { c in c.duration = 0.12; w.animator().alphaValue = 1 }   // a short fade, not a pop
+    }
 
     // ---- Adaptive icon colour: how bright is the live screen behind each strip? ----
     private var lastRects: [CGRect] = []

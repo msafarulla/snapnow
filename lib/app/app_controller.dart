@@ -112,6 +112,11 @@ class AppController with TrayListener, WindowListener {
     if (!await windowManager.isVisible()) await windowManager.show();
     await libraryKey.currentState?.openDraw(path);
     editorKey.currentState?.armCursorKick();
+    // Two frames: the one that lays out the new glass and the one that paints it, so the window never fades in on the
+    // previous session's picture (it keeps its last frame while hidden).
+    await WidgetsBinding.instance.endOfFrame;
+    await WidgetsBinding.instance.endOfFrame;
+    await Native.drawReady();
   }
 
   bool drawing = false;
