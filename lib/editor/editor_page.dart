@@ -155,7 +155,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       _toolbarDragAt = null; _toolbarDropLeft = null; // a toolbar drag cut short by switching modes would leave its ghost copy on screen
       _ToolButton.glass = widget.overlay;
       if (!widget.overlay) { _toolbarBright = null; _panelBright = null; }
-      if (widget.overlay) _drawRestore();
+      if (widget.overlay) {
+        _drawRestore();
+        _zoom = null; _pan = Offset.zero; // a zoom left over from the editor (same State) must not scale or shift the glass
+      }
     }
   }
 
@@ -433,9 +436,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   bool get _zoomed => _zoom != null;
 
   /// Sets the view scale, keeping the image point under `focal` (canvas-area coords) where it is.
+  /// Never in draw mode: the glass lies 1:1 over the live screen (no pinch, ⌘-scroll, ⌘+ / ⌘− / ⌘1, menu zoom).
   void _zoomTo(double scale, {Offset? focal}) {
     final s = _state;
-    if (s == null || _viewSize.isEmpty) return;
+    if (widget.overlay || s == null || _viewSize.isEmpty) return;
     final dpr = MediaQuery.devicePixelRatioOf(context);
     final next = scale.clamp(0.1 / dpr, 8 / dpr).toDouble();
     final f = focal ?? _viewInsets.deflateSize(_viewSize).center(_viewInsets.topLeft);
@@ -451,11 +455,11 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   void _zoomBy(double factor, {Offset? focal}) => _zoomTo(_viewScale * factor, focal: focal);
   void zoomIn() => _zoomBy(1.25);
   void zoomOut() => _zoomBy(0.8);
-  void zoomToFit() => setState(() { _zoom = null; _pan = Offset.zero; });
+  void zoomToFit() { if (!widget.overlay) setState(() { _zoom = null; _pan = Offset.zero; }); }
   void zoomActualSize() => _zoomTo(1 / MediaQuery.devicePixelRatioOf(context));
 
   void _panBy(Offset delta) {
-    if (!_zoomed) return;
+    if (!_zoomed || widget.overlay) return;
     setState(() => _pan += delta);
     _viewOrigin += delta;
   }
@@ -2787,7 +2791,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
             if (_formatBarTarget case final a?) _formatBar(a, origin, scale, Size(constraints.maxWidth, constraints.maxHeight)),
             if (_thicknessTarget case final a?) _thicknessSlider(a, origin, scale, Size(constraints.maxWidth, constraints.maxHeight)),
             if (_colorBarTarget case final a?) _colorBar(a, origin, scale, Size(constraints.maxWidth, constraints.maxHeight)),
-            Positioned(right: ins.right + 12, bottom: ins.bottom + 12, child: _zoomPill()),
+            if (!widget.overlay) Positioned(right: ins.right + 12, bottom: ins.bottom + 12, child: _zoomPill()), // no Fit / − / + on the glass
           ]),
         ),
       ));
