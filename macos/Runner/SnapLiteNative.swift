@@ -9,6 +9,7 @@ import Vision
 /// Screen Recording permission. Windows/Linux implement the same channel later.
 final class SnapLiteNative {
   static weak var shared: SnapLiteNative?
+  static let movieTypes: Set<String> = ["mov", "mp4"]
 
   private let channel: FlutterMethodChannel
   private let recorder = Recorder.shared
@@ -43,7 +44,7 @@ final class SnapLiteNative {
       case "openImage": Shell.shared.openImage()
       case "settings": Shell.shared.showSettings()
       case "endDraw": LiveDraw.shared.endFromEditor()
-      case let name?: if let action = ShortcutAction(rawValue: name) { Shell.shared.perform(action) }
+      case let name?: if let action = ShortcutAction(rawValue: name) { Shell.shared.perform(action, source: "editor menu") }
       default: break
       }
       result(nil)
@@ -72,8 +73,46 @@ final class SnapLiteNative {
         DispatchQueue.main.async { result(png.map { FlutterStandardTypedData(bytes: $0) }) }
       }
     case "trash":
-      let urls = (args["paths"] as? [String] ?? []).map { URL(fileURLWithPath: $0) }
+      // A movie's transcript files go with it
+      var urls = (args["paths"] as? [String] ?? []).map { URL(fileURLWithPath: $0) }
+      for movie in urls where Self.movieTypes.contains(movie.pathExtension.lowercased()) {
+        Transcripts.shared.forget(movie.path)
+        let side = TranscriptFormat.sidecars(for: movie)
+        urls += [side.text, side.captions].filter { FileManager.default.fileExists(atPath: $0.path) }
+      }
       NSWorkspace.shared.recycle(urls) { _, _ in DispatchQueue.main.async { result(nil) } }
+    case "transcriptStates":
+      var states: [String: Any] = [:]
+      for path in args["paths"] as? [String] ?? [] { states[path] = Transcripts.shared.state(path) }
+      result(states)
+    case "makeTranscript":
+      if let path = args["path"] as? String { Transcripts.shared.make(URL(fileURLWithPath: path), manual: true) }
+      result(nil)
+    case "renameCapture":
+      // A new name in the same folder; a movie's transcript files are renamed with it
+      let old = URL(fileURLWithPath: args["path"] as? String ?? "")
+      var name = (args["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+      if name.lowercased().hasSuffix("." + old.pathExtension.lowercased()) { name = String(name.dropLast(old.pathExtension.count + 1)) }
+      guard !name.isEmpty, !name.contains("/"), !name.contains(":"), !name.hasPrefix(".") else {
+        result(FlutterError(code: "name", message: "That name can't be used.", details: nil)); return
+      }
+      let new = old.deletingLastPathComponent().appendingPathComponent(name).appendingPathExtension(old.pathExtension)
+      guard new.path != old.path else { result(old.path); return }
+      guard !FileManager.default.fileExists(atPath: new.path) else {
+        result(FlutterError(code: "exists", message: "There is already a capture called \(name).", details: nil)); return
+      }
+      do {
+        try FileManager.default.moveItem(at: old, to: new)
+        let from = TranscriptFormat.sidecars(for: old), to = TranscriptFormat.sidecars(for: new)
+        for (a, b) in [(from.text, to.text), (from.captions, to.captions)]
+        where FileManager.default.fileExists(atPath: a.path) && !FileManager.default.fileExists(atPath: b.path) {
+          try? FileManager.default.moveItem(at: a, to: b)
+        }
+        Transcripts.shared.moved(from: old.path, to: new.path)
+        result(new.path)
+      } catch {
+        result(FlutterError(code: "rename", message: error.localizedDescription, details: nil))
+      }
     case "copyFiles":
       // One image: the picture plus its file; several (or movies): the files
       let urls = (args["paths"] as? [String] ?? []).map { URL(fileURLWithPath: $0) }
@@ -201,7 +240,7 @@ final class SnapLiteNative {
         }
       }
     case "stopRecording":
-      recorder.stop()
+      recorder.stop(source: "editor: stopRecording")
       result(nil)
     case "isRecording":
       result(recorder.isRecording)

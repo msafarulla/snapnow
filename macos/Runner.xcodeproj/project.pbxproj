@@ -22,6 +22,9 @@
 
 /* Begin PBXBuildFile section */
 		5C0A11D2B7E94F3A00C1AA02 /* ScreenRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0A11D2B7E94F3A00C1AA01 /* ScreenRecorder.swift */; };
+		5C0A11D2B7E94F3A00C1AA04 /* Transcript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0A11D2B7E94F3A00C1AA03 /* Transcript.swift */; };
+		5C0A11D2B7E94F3A00C1AA06 /* TranscriptJobs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0A11D2B7E94F3A00C1AA05 /* TranscriptJobs.swift */; };
+		5C0A11D2B7E94F3A00C1AA08 /* MovieWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0A11D2B7E94F3A00C1AA07 /* MovieWriter.swift */; };
 		05EA71004FFA77FBC4B05245 /* GIFExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5022EDAF9DFD390EB827B8 /* GIFExporter.swift */; };
 		1543D05CC92C4A567B03D00B /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E008509001E87CB63036BA91 /* Pods_RunnerTests.framework */; };
 		18837B033D5B2A30E72D6C6D /* HotKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50F51C57FB6403EA2C829730 /* HotKeys.swift */; };
@@ -79,6 +82,9 @@
 
 /* Begin PBXFileReference section */
 		5C0A11D2B7E94F3A00C1AA01 /* ScreenRecorder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScreenRecorder.swift; sourceTree = "<group>"; };
+		5C0A11D2B7E94F3A00C1AA03 /* Transcript.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Transcript.swift; sourceTree = "<group>"; };
+		5C0A11D2B7E94F3A00C1AA05 /* TranscriptJobs.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TranscriptJobs.swift; sourceTree = "<group>"; };
+		5C0A11D2B7E94F3A00C1AA07 /* MovieWriter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MovieWriter.swift; sourceTree = "<group>"; };
 		112460035BE26E2274E76319 /* Pods-Runner.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.profile.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"; sourceTree = "<group>"; };
 		128B222952B0A6E8CDBBD116 /* Shell.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Shell.swift; sourceTree = "<group>"; };
 		16DC590BFB3D5C26CDBD7C65 /* Toast.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Toast.swift; sourceTree = "<group>"; };
@@ -248,6 +254,9 @@
 				6F62BE19F6AC78CB62CC2C41 /* Theme.swift */,
 				16DC590BFB3D5C26CDBD7C65 /* Toast.swift */,
 				5C0A11D2B7E94F3A00C1AA01 /* ScreenRecorder.swift */,
+				5C0A11D2B7E94F3A00C1AA03 /* Transcript.swift */,
+				5C0A11D2B7E94F3A00C1AA05 /* TranscriptJobs.swift */,
+				5C0A11D2B7E94F3A00C1AA07 /* MovieWriter.swift */,
 				5A1D0C0FFEE0000000000A02 /* MatrixRain.swift */,
 				5A1D0C0FFEE0000000000A04 /* MatrixRainCore.swift */,
 				AD5022EDAF9DFD390EB827B8 /* GIFExporter.swift */,
@@ -510,6 +519,9 @@
 				575C43B914B47BCDFD2C04EA /* Theme.swift in Sources */,
 				3357992651D22A08177DD339 /* Toast.swift in Sources */,
 				5C0A11D2B7E94F3A00C1AA02 /* ScreenRecorder.swift in Sources */,
+				5C0A11D2B7E94F3A00C1AA04 /* Transcript.swift in Sources */,
+				5C0A11D2B7E94F3A00C1AA06 /* TranscriptJobs.swift in Sources */,
+				5C0A11D2B7E94F3A00C1AA08 /* MovieWriter.swift in Sources */,
 				5A1D0C0FFEE0000000000A01 /* MatrixRain.swift in Sources */,
 				5A1D0C0FFEE0000000000A03 /* MatrixRainCore.swift in Sources */,
 				05EA71004FFA77FBC4B05245 /* GIFExporter.swift in Sources */,

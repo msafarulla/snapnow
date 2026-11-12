@@ -20,6 +20,8 @@ class Native {
   static void Function()? onShowLibrary;
   static void Function()? onCapturesChanged;
   static void Function(String choice)? onAppearanceChanged;
+  /// A movie's transcript changed (state, progress…; see TranscriptInfo in library/transcripts.dart).
+  static void Function(Map<Object?, Object?> info)? onTranscriptChanged;
 
   static void init() {
     _ch.setMethodCallHandler((call) async {
@@ -35,6 +37,7 @@ class Native {
         case 'capturesChanged': onCapturesChanged?.call();
         case 'colorPicked': onColorPicked?.call(call.arguments as int);
         case 'appearanceChanged': onAppearanceChanged?.call(call.arguments as String);
+        case 'transcriptChanged': onTranscriptChanged?.call(call.arguments as Map);
       }
     });
   }
@@ -53,6 +56,15 @@ class Native {
   static Future<Uint8List?> thumbnail(String path, {double size = 180}) =>
       _call<Uint8List>('thumbnail', {'path': path, 'size': size});
   static Future<void> trash(List<String> paths) => _call('trash', {'paths': paths});
+  /// Transcript state per movie path (see TranscriptInfo).
+  static Future<Map<String, Map<Object?, Object?>>> transcriptStates(List<String> paths) async {
+    final m = await _call<Map>('transcriptStates', {'paths': paths}) ?? const {};
+    return {for (final e in m.entries) e.key as String: e.value as Map};
+  }
+  /// Makes (or makes again) a movie's transcript, on this Mac, in the background.
+  static Future<void> makeTranscript(String path) => _call('makeTranscript', {'path': path});
+  /// Renames a capture in its folder (a movie's transcript files go along); the new path. Throws with a message if it can't.
+  static Future<String?> renameCapture(String path, String name) => _call<String>('renameCapture', {'path': path, 'name': name});
   static Future<void> copyFiles(List<String> paths) => _call('copyFiles', {'paths': paths});
   static Future<void> copyTextOfFile(String path) => _call('copyTextOfFile', {'path': path});
   /// Puts the GIF file on the clipboard as both GIF data and a file, so it pastes animated.

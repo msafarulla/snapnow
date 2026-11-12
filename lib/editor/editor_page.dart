@@ -1157,10 +1157,13 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     return tool == Tool.arrow ? ArrowShape(a, b, points: mid) : LineShape(a, b, points: mid);
   }
 
+  /// A shape just drawn. In the editor it becomes the selection (handles, colour bar, thickness slider). On draw mode's
+  /// glass it does not: nothing pops up after each stroke and the next shape can be drawn at once; clicking a drawn shape
+  /// selects it to change it (the pointer-down hit test, "any tool: clicking an existing annotation selects it").
   void _add(Annotation a) {
     final next = _state!.copyWith(annotations: [..._state!.annotations, a]);
     _commit(next);
-    setState(() { _selection = a.id; _group.clear(); });
+    setState(() { _selection = widget.overlay ? null : a.id; _group.clear(); });
   }
 
   /// Shows `a` appearing as the GIF would (Play): drawn on, as the string art of its tangents, or traced by Fourier circles
@@ -1340,6 +1343,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                 a.copyWith(shape: _withText(a.shape, text, TextRuns.adjust(_textController.text, text, _textController.runs))),
           ]);
           if (text.isEmpty) _selection = null; // emptied an existing one: it is removed
+          if (e.isNew && widget.overlay) _selection = null; // a new text on the glass, like a new shape: no bars after typing
         });
       }
     }

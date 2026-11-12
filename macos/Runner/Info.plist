@@ -30,6 +30,8 @@
 	<string>MainMenu</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>SnapNow records your voice with a screen recording when Record Microphone is on.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>SnapNow turns the speech in your screen recordings into transcripts, on this Mac only.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

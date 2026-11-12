@@ -61,7 +61,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var hud: RecordingHUD?
     private var uiTimer: Timer?
     private var stopRequested = false
-    private var pendingStop: (reason: EndReason, done: (() -> Void)?)?
+    private var pendingStop: (reason: EndReason, source: String, done: (() -> Void)?)?
+    /// How the last recording ended and who or what ended it (status.json "lastEndReason"; see noteEnd).
+    private(set) var lastEnd: [String: Any]?
     private var appliedExclusions = Set<CGWindowID>()
     private var exclusionBusy = false
     private var microphoneOn = false
@@ -76,14 +78,11 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private let queue = DispatchQueue(label: "snapnow.recorder")
     private var stream: SCStream?
     private var display: SCDisplay?
-    private var writer: AVAssetWriter?
-    private var videoInput: AVAssetWriterInput?
-    private var audioInput: AVAssetWriterInput?
+    private var movieWriter: MovieWriter?
     private var url: URL?
-    private var sessionStarted = false
-    private var firstPTS = CMTime.invalid
-    private var lastPTS = CMTime.invalid
-    private var lastVideo: CMSampleBuffer?
+    private var callbacks: [String: Int] = [:]      // what the capture delivered, by kind (diagnostics)
+    private var lastCallback = Date.distantPast      // the capture's latest delivery of any kind, an unchanged frame included
+    private var sawIdleFrames = false                // this Mac reports an unchanged screen with "idle" frames
     private var beat: DispatchSourceTimer?
     private var syntheticTimer: DispatchSourceTimer?   // tests only
     private var closing = false
@@ -98,6 +97,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         var lastAppend = Date.distantPast
         var lastGrowth = Date.distantPast
         var failure: String?
+        var failureDetail: String?     // the capture's error domain and code, for the end's record
     }
     private let lock = NSLock()
     private var progress = Progress()
@@ -120,7 +120,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// `rect` is in Cocoa global coordinates. `completion` (main thread) tells whether capture began; the first
     /// written frame is announced separately with `.started`.
-    func start(rect: CGRect, microphone: Bool, showClicks: Bool, synthetic: Bool = false, completion: @escaping (Bool) -> Void) {
+    func start(rect: CGRect, microphone: Bool, showClicks: Bool, synthetic: Bool = false, systemAudio: Bool? = nil,
+               completion: @escaping (Bool) -> Void) {
         guard !isRecording, !finalizing else { completion(false); return }
         dismissEndedPill()
         guard let screen = NSScreen.screens.max(by: { overlap($0.frame, rect) < overlap($1.frame, rect) }),
@@ -141,7 +142,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         microphoneOn = microphone
         lock.lock(); progress = Progress(); lock.unlock()
         appliedExclusions = []
-        let pill = RecordingHUD(area: area, screen: screen, fullScreen: full, microphone: microphone) { [weak self] in self?.stop() }
+        let pill = RecordingHUD(area: area, screen: screen, fullScreen: full, microphone: microphone) { [weak self] in
+            self?.stop(source: "the Stop button on the recording's bar")
+        }
         pill.show()
         hud = pill
         startUITimer()
@@ -149,9 +152,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { @MainActor in
             do {
                 try await self.begin(area: area, screen: screen, displayID: displayID, movie: movie,
-                                     microphone: microphone, showClicks: showClicks, synthetic: synthetic)
+                                     microphone: microphone, systemAudio: systemAudio ?? Prefs.onByDefault(Prefs.systemAudio),
+                                     showClicks: showClicks, synthetic: synthetic)
                 completion(true)
-                if self.stopRequested { self.finish(reason: self.pendingStop?.reason ?? .user, done: self.pendingStop?.done) }
+                if self.stopRequested, let p = self.pendingStop { self.finish(reason: p.reason, source: p.source, done: p.done) }
             } catch {
                 NSLog("SnapNow recorder: could not start: \(Self.describe(error)) [\(error)]")
                 self.abandon(movie)
@@ -178,7 +182,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     @MainActor
     private func begin(area: CGRect, screen: NSScreen, displayID: CGDirectDisplayID, movie: URL,
-                       microphone: Bool, showClicks: Bool, synthetic: Bool) async throws {
+                       microphone: Bool, systemAudio: Bool, showClicks: Bool, synthetic: Bool) async throws {
         // `synthetic` (tests only, see RecorderTestControl) feeds generated pictures through the same writer
         // and health check, for a Mac whose display cannot be captured at the moment.
         var display: SCDisplay?
@@ -196,10 +200,14 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             filter = f
             scale = max(1, CGFloat(f.pointPixelScale))
         }
+        // Not every Retina pixel: a size that keeps text crisp (at least a pixel per point) without doubling the file
+        let quality = RecordingQuality.current
+        scale = MovieWriter.outputScale(points: area.size, backing: scale, quality: quality)
 
         let width = Int(area.width * scale) & ~1
         let height = Int(area.height * scale) & ~1
         var withMic = false
+        var withSystem = false
         var config: SCStreamConfiguration?
         if filter != nil {
             let c = SCStreamConfiguration()
@@ -212,7 +220,15 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             c.queueDepth = 6
             c.showsCursor = true
             c.pixelFormat = kCVPixelFormatType_32BGRA
-            c.capturesAudio = false
+            c.captureResolution = .best   // sampled from every Retina pixel and scaled down by the capture, so text stays crisp
+            // The computer's sound (what the apps play: a call, a video) on its own track; SnapNow's own sounds stay out
+            if systemAudio {
+                c.capturesAudio = true
+                c.excludesCurrentProcessAudio = true
+                c.sampleRate = 48_000
+                c.channelCount = 2
+                withSystem = true
+            }
             if #available(macOS 15.0, *) {
                 c.showMouseClicks = showClicks
                 if microphone { c.captureMicrophone = true; withMic = true }
@@ -220,48 +236,23 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             config = c
         }
 
-        let w = try AVAssetWriter(outputURL: movie, fileType: .mov)
-        w.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
-        w.shouldOptimizeForNetworkUse = false
-        let bitrate = max(2_000_000, min(12_000_000, Int(Double(width * height) * 1.5)))
-        let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: bitrate,
-                AVVideoMaxKeyFrameIntervalKey: 60,     // a key frame at least every two seconds: each fragment starts on one
-                AVVideoExpectedSourceFrameRateKey: 30,
-                AVVideoAllowFrameReorderingKey: false,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-            ],
-        ])
-        video.expectsMediaDataInRealTime = true
-        w.add(video)
-        var audio: AVAssetWriterInput?
-        if withMic {
-            let a = AVAssetWriterInput(mediaType: .audio, outputSettings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC, AVNumberOfChannelsKey: 1, AVSampleRateKey: 48_000, AVEncoderBitRateKey: 96_000,
-            ])
-            a.expectsMediaDataInRealTime = true
-            w.add(a)
-            audio = a
-        }
-        guard w.startWriting() else { throw RecorderError(text: w.error?.localizedDescription ?? "the movie file could not be created") }
+        // The file itself (tracks, fragments, keeping it going on a still screen): MovieWriter
+        let w = try MovieWriter(url: movie, width: width, height: height, systemAudio: withSystem, microphone: withMic, quality: quality)
         RecordingMarker.write(movie, started: startedAt ?? Date())
 
         var s: SCStream?
         if let filter, let config {
             let made = SCStream(filter: filter, configuration: config, delegate: self)
             try made.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+            if withSystem { try made.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue) }
             if withMic, #available(macOS 15.0, *) { try made.addStreamOutput(self, type: .microphone, sampleHandlerQueue: queue) }
             s = made
         }
 
         queue.sync {
-            self.stream = s; self.display = display; self.writer = w; self.videoInput = video; self.audioInput = audio
-            self.url = movie; self.sessionStarted = false; self.firstPTS = .invalid; self.lastPTS = .invalid
-            self.lastVideo = nil; self.closing = false; self.frozen = false; self.lastSize = 0
+            self.stream = s; self.display = display; self.movieWriter = w; self.url = movie
+            self.callbacks = [:]; self.lastCallback = Date(); self.sawIdleFrames = false
+            self.closing = false; self.frozen = false; self.lastSize = 0
             self.startHeartbeat()
             if synthetic { self.startSyntheticFrames(width: width, height: height) }
         }
@@ -293,7 +284,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 30), presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()), decodeTimeStamp: .invalid)
             var sample: CMSampleBuffer?
             if let format { CMSampleBufferCreateReadyWithImageBuffer(allocator: nil, imageBuffer: buffer, formatDescription: format, sampleTiming: &timing, sampleBufferOut: &sample) }
-            if let sample, let w = self.writer, w.status == .writing { self.appendVideo(sample) }
+            if let sample { self.lastCallback = Date(); self.movieWriter?.appendVideo(sample) }
         }
         t.resume()
         syntheticTimer = t
@@ -304,8 +295,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         queue.sync {
             beat?.cancel(); beat = nil
             syntheticTimer?.cancel(); syntheticTimer = nil
-            writer?.cancelWriting()
-            writer = nil; stream = nil; videoInput = nil; audioInput = nil; lastVideo = nil; url = nil
+            movieWriter?.cancel()
+            movieWriter = nil; stream = nil; url = nil
         }
         try? FileManager.default.removeItem(at: movie)
         RecordingMarker.clear()
@@ -317,72 +308,73 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: Writing (capture queue)
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard sampleBuffer.isValid, !closing, !frozen, let w = writer, w.status == .writing else { return }
+        guard sampleBuffer.isValid, !closing, !frozen, let m = movieWriter else { return }
+        lastCallback = Date()
+        let now = CMClockGetTime(CMClockGetHostTimeClock())
         if type == .screen {
-            // Only frames that carry a picture; "idle" and "blank" callbacks have none
-            guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-                  let raw = attachments.first?[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete else { return }
-            appendVideo(sampleBuffer)
+            // Only a "complete" frame carries a new picture; an "idle" one says the screen has not changed
+            let info = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]]
+            switch (info?.first?[.status] as? Int).flatMap(SCFrameStatus.init(rawValue:)) {
+            case .complete?:
+                callbacks["screen.complete", default: 0] += 1
+                m.appendVideo(sampleBuffer)
+            case .idle?:
+                callbacks["screen.idle", default: 0] += 1
+                sawIdleFrames = true
+            default:
+                callbacks["screen.other", default: 0] += 1
+            }
+        } else if type == .audio {
+            callbacks["audio", default: 0] += 1
+            m.appendAudio(sampleBuffer, track: .system, now: now)
         } else if #available(macOS 15.0, *), type == .microphone {
-            appendAudio(sampleBuffer)
+            callbacks["microphone", default: 0] += 1
+            m.appendAudio(sampleBuffer, track: .microphone, now: now)
         }
     }
 
-    private func appendVideo(_ sample: CMSampleBuffer) {
-        guard let w = writer, let input = videoInput else { return }
-        let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-        if !sessionStarted {
-            w.startSession(atSourceTime: pts)
-            firstPTS = pts; lastPTS = CMTime(value: pts.value - 1, timescale: pts.timescale)
-            sessionStarted = true
-        }
-        guard pts > lastPTS, input.isReadyForMoreMediaData else { return }   // a frame the encoder cannot take is dropped
-        if input.append(sample) {
-            lastPTS = pts
-            lastVideo = sample
-            noteAppend()
-        } else {
-            fail(w.error?.localizedDescription ?? "the movie file could not be written")
-        }
-    }
-
-    private func appendAudio(_ sample: CMSampleBuffer) {
-        guard sessionStarted, let input = audioInput, input.isReadyForMoreMediaData,
-              CMSampleBufferGetPresentationTimeStamp(sample) >= firstPTS else { return }
-        _ = input.append(sample)
-    }
-
-    private func noteAppend() {
-        let seconds = max(0, CMTimeGetSeconds(CMTimeSubtract(lastPTS, firstPTS)))
-        update { $0.seconds = seconds; $0.firstFrame = true; $0.lastAppend = Date(); if $0.lastGrowth == .distantPast { $0.lastGrowth = Date() } }
-    }
-
-    /// A still screen produces no frames, so the last picture is written again about once a second: the movie
-    /// keeps its length and the bytes keep landing, which is what the health check looks at. Every half second
-    /// it also reads the file's size from disk.
+    /// Four times a second: the movie is kept going while the capture is alive (MovieWriter.tick: a still screen's picture
+    /// again, silence in a quiet sound track, waiting samples in), the file's size is read, and what the pill and the
+    /// health check show is taken from what has really been written.
     private func startHeartbeat() {
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        t.schedule(deadline: .now() + 0.25, repeating: 0.25)
         t.setEventHandler { [weak self] in self?.heartbeat() }
         t.resume()
         beat = t
     }
 
+    /// Whether the capture itself still delivers. On a Mac that reports an unchanged screen with idle frames, 5 s without
+    /// any delivery means the capture is gone; where it sends nothing for a still screen, a still screen and a dead capture
+    /// look the same, and a stream error (didStopWithError) or a writer that stops taking samples is what tells.
+    private var captureAlive: Bool { !sawIdleFrames || Date().timeIntervalSince(lastCallback) < 5 }
+
     private func heartbeat() {
-        guard !closing, !frozen, let w = writer, w.status == .writing else { return }
+        guard !closing, !frozen, let m = movieWriter else { return }
         if let url, let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value {
             if size > lastSize { update { $0.lastGrowth = Date() } }
             lastSize = size
             update { $0.bytes = size }
         }
-        guard sessionStarted, let last = lastVideo, let input = videoInput, input.isReadyForMoreMediaData else { return }
-        let now = CMClockGetTime(CMClockGetHostTimeClock())
-        guard CMTimeGetSeconds(CMTimeSubtract(now, lastPTS)) > 1.0 else { return }
-        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: now, decodeTimeStamp: .invalid)
-        var copy: CMSampleBuffer?
-        guard CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: last, sampleTimingEntryCount: 1,
-                                                    sampleTimingArray: &timing, sampleBufferOut: &copy) == noErr, let copy else { return }
-        if input.append(copy) { lastPTS = now; noteAppend() } else { fail(w.error?.localizedDescription ?? "the movie file could not be written") }
+        if captureAlive { m.tick(now: CMClockGetTime(CMClockGetHostTimeClock())) }
+        if let why = m.failure { fail(why) }
+        let seconds = m.seconds, started = m.started, wrote = m.lastWrite
+        update {
+            $0.seconds = seconds
+            $0.firstFrame = started
+            if wrote > $0.lastAppend { $0.lastAppend = wrote }
+            if started && $0.lastGrowth == .distantPast { $0.lastGrowth = Date() }
+        }
+    }
+
+    /// For the test control's status.json: what the capture delivered and what the movie writer did with it.
+    var diagnosticsSnapshot: [String: Any] {
+        queue.sync {
+            var d: [String: Any] = ["callbacks": callbacks, "sawIdleFrames": sawIdleFrames,
+                                    "secondsSinceCaptureDelivered": min(Date().timeIntervalSince(lastCallback), 1e9)]
+            if let m = movieWriter { d["writer"] = m.stats; d["movieSeconds"] = m.seconds; d["encoder"] = m.encoder }
+            return d
+        }
     }
 
     /// The writer or the stream gave up. What is on disk is kept; the main thread is told through `failure`.
@@ -392,6 +384,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
+        let e = error as NSError
+        update { if $0.failureDetail == nil { $0.failureDetail = "\(e.domain) \(e.code)" } }
         fail("the screen capture stopped (\(error.localizedDescription))")
     }
 
@@ -486,29 +480,72 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     // MARK: Ending
 
-    /// Stops and finalizes the movie, then reports `.finished`. Safe to call repeatedly.
-    func stop(reason: EndReason = .user, done: (() -> Void)? = nil) {
+    /// Stops and finalizes the movie, then reports `.finished`. Safe to call repeatedly. `source` says who asked (the Stop
+    /// button, the menu, the shortcut, the test control, app quit, system sleep…): every end is recorded (noteEnd).
+    func stop(reason: EndReason = .user, source: String, done: (() -> Void)? = nil) {
         if finalizing { if let done { waiters.append(done) }; return }
-        if health == .starting && !stopRequested { stopRequested = true; pendingStop = (reason, done); return }
+        if health == .starting && !stopRequested { stopRequested = true; pendingStop = (reason, source, done); return }
         guard isRecording else { done?(); return }
-        finish(reason: reason, done: done)
+        finish(reason: reason, source: source, done: done)
     }
 
-    private func finish(reason: EndReason, done: (() -> Void)?) {
+    /// Every end of a recording with who or what ended it: in the log, in recording-ends.log (kept across launches, so an
+    /// end during a quit is still there) and in the test control's status.json at once. An end nobody asked for can then
+    /// be traced. `unexpected`: not asked for by the user (a failure, sleep).
+    private func noteEnd(source: String, unexpected: Bool, detail: String? = nil) {
+        let seconds = snapshot().seconds
+        var entry: [String: Any] = ["at": ISO8601DateFormatter().string(from: Date()), "pid": Int(getpid()), "source": source,
+                                    "kind": unexpected ? "unexpected" : "stopped", "movieSeconds": (seconds * 100).rounded() / 100]
+        if let detail { entry["detail"] = detail }
+        if let path = queue.sync(execute: { url?.path }) { entry["movie"] = path }
+        lastEnd = entry
+        let line = "\(entry["at"]!) pid \(getpid()) \(unexpected ? "UNEXPECTED" : "stopped") after \(String(format: "%.1f", seconds)) s: \(source)"
+            + (detail.map { " (\($0))" } ?? "")
+        NSLog("SnapNow recorder: recording ended: \(line)")
+        Self.appendEndLog(line)
+        RecorderTestControl.recordingEnded()
+    }
+
+    /// ~/Library/Application Support/SnapNow/recording-ends.log, the last 200 ends.
+    static var endsLog: URL { RecordingMarker.file.deletingLastPathComponent().appendingPathComponent("recording-ends.log") }
+
+    static func recentEnds(_ n: Int) -> [String] {
+        let text = (try? String(contentsOf: endsLog, encoding: .utf8)) ?? ""
+        return Array(text.split(separator: "\n").suffix(n).map(String.init))
+    }
+
+    private static func appendEndLog(_ line: String) {
+        let lines = recentEnds(199) + [line]
+        try? (lines.joined(separator: "\n") + "\n").write(to: endsLog, atomically: true, encoding: .utf8)
+    }
+
+    private func finish(reason: EndReason, source: String, done: (() -> Void)?) {
         guard health == .recording || health == .stalled || health == .starting else { done?(); return }
+        noteEnd(source: source, unexpected: reason == .sleep)
         uiTimer?.invalidate(); uiTimer = nil
         health = .idle
         finalizing = true
+        let stopAt = CMClockGetTime(CMClockGetHostTimeClock())   // the movie runs to this moment, whatever the screen did
         let s = queue.sync { stream }
         Task { @MainActor in
             try? await s?.stopCapture()
-            self.close {
+            self.close(at: stopAt) {
                 DispatchQueue.main.async {
                     let summary = self.summary()
                     RecordingMarker.clear()
-                    self.teardownUI()
+                    if reason == .sleep {
+                        // Not asked for by the user: the bar stays and says so, as for any other unexpected end
+                        self.health = .stopped
+                        self.hud?.hideBorder()
+                        self.hud?.setEnded(reason: "the Mac went to sleep")
+                        if let summary { self.hud?.update(seconds: summary.seconds, bytes: summary.bytes) }
+                    } else {
+                        self.teardownUI()
+                    }
                     self.startedAt = nil
                     self.finalizing = false
+                    NotificationCenter.default.post(name: Self.recordingChanged, object: nil)   // transcripts may go on now
+                    RecorderTestControl.recordingEnded()   // and once more with the movie closed
                     if let summary { self.onEvent?(.finished(summary, reason)) }
                     done?()
                     let queued = self.waiters
@@ -521,13 +558,14 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private func endUnexpectedly(_ reason: String) {
         guard isRecording else { return }
+        noteEnd(source: "the recording failed: \(reason)", unexpected: true, detail: snapshot().failureDetail)
         uiTimer?.invalidate(); uiTimer = nil
         health = .stopped
         let s = queue.sync { stream }
         hud?.setEnded(reason: reason)
         Task { @MainActor in
             try? await s?.stopCapture()
-            self.close {
+            self.close(at: .zero) {   // ended on its own: the movie ends where its media does
                 DispatchQueue.main.async {
                     let summary = self.summary()
                     RecordingMarker.clear()
@@ -535,28 +573,27 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
                     if let summary { self.hud?.update(seconds: summary.seconds, bytes: summary.bytes) }
                     self.startedAt = nil
                     self.onEvent?(.failed(summary, reason))
+                    RecorderTestControl.recordingEnded()
                 }
             }
         }
     }
 
-    /// Finishes the movie (fragments, then the final header). With no frame at all the empty file is removed.
-    private func close(_ done: @escaping () -> Void) {
+    /// Finishes the movie at `stop` (MovieWriter.finish: the picture held and the sound filled up to it, then the final
+    /// header). With no picture at all the empty file is removed.
+    private func close(at stop: CMTime, _ done: @escaping () -> Void) {
         queue.async {
             self.closing = true
             self.beat?.cancel(); self.beat = nil
             self.syntheticTimer?.cancel(); self.syntheticTimer = nil
-            guard let w = self.writer else { done(); return }
-            if w.status == .writing, self.sessionStarted {
-                if self.lastPTS.isValid { w.endSession(atSourceTime: self.lastPTS) }
-                self.videoInput?.markAsFinished()
-                self.audioInput?.markAsFinished()
-                w.finishWriting { done() }
-            } else {
-                w.cancelWriting()
-                if let url = self.url { try? FileManager.default.removeItem(at: url) }
-                self.url = nil
-                done()
+            guard let m = self.movieWriter else { done(); return }
+            m.finish(at: stop) {
+                self.queue.async {
+                    if !FileManager.default.fileExists(atPath: m.url.path) { self.url = nil }
+                    let seconds = m.seconds
+                    self.update { $0.seconds = seconds }
+                    done()
+                }
             }
         }
     }
@@ -571,7 +608,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     func finalizeNowIfNeeded() {
         guard isRecording else { return }
         let gate = DispatchSemaphore(value: 0)
-        close { gate.signal() }
+        close(at: CMClockGetTime(CMClockGetHostTimeClock())) { gate.signal() }
         _ = gate.wait(timeout: .now() + 4)
         RecordingMarker.clear()
     }
@@ -927,7 +964,9 @@ private final class BorderView: NSView {
 /// Off unless the app is launched with SNAPNOW_TEST_CONTROL=<path of a JSON file>. Then SnapNow reads that file
 /// whenever it changes and acts on its "action", so recordings and what runs beside them can be driven and checked
 /// without clicking:
-///   "start" ("fullScreen": bool, "mic": bool, "x","y","w","h", "synthetic": bool), "stop", "stall", "resume", "drop";
+///   "start" ("fullScreen": bool, "mic": bool, "systemAudio": bool, "x","y","w","h", "synthetic": bool), "stop", "stall",
+///   "resume", "drop"; "transcribe" ("path": a movie: makes its transcript now, as Make Transcript; status.json then has
+///   "transcript" with its state, progress and sidecar paths);
 ///   "open" ("path": an image opened in the editor, as from Recent Captures),
 ///   "draw" (draw mode on/off, as a double-tap of Option), "matrix" (the rain on/off), "icon" (a left click on the menu
 ///   bar icon), "region" ("x","y","w","h": a region capture of that area without the picker), "screen" (Capture Full
@@ -943,6 +982,7 @@ enum RecorderTestControl {
     static var folder: URL? { path.map { URL(fileURLWithPath: $0).deletingLastPathComponent() } }
 
     private static var seen: Date?
+    private static var transcriptPath: String?
 
     static func install() {
         guard let path else { return }
@@ -951,15 +991,27 @@ enum RecorderTestControl {
         let timer = Timer(timeInterval: 0.5, repeats: true) { _ in
             guard let stamp = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? nil, stamp != seen else { return }
             seen = stamp
-            run()
+            run(stamp: stamp)
         }
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private static func run() {
+    /// The last commands handled (status.json "commands"), to see what was really acted on.
+    private static var handled: [[String: Any]] = []
+    private static let launched = Date()
+
+    private static func run(stamp: Date) {
         guard let path, let data = try? Data(contentsOf: URL(fileURLWithPath: path)), let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let action = json["action"] as? String else { NSLog("SnapNow test control: the command file could not be read"); return }
         NSLog("SnapNow test control: \(action)")
+        handled.append(["at": ISO8601DateFormatter().string(from: Date()), "action": action, "fileTime": stamp.timeIntervalSince1970])
+        if handled.count > 20 { handled.removeFirst(handled.count - 20) }
+        // A stop written before the recording now running began is an old command read again: never let it end this one
+        if action == "stop", let began = Recorder.shared.startedAt, stamp < began {
+            NSLog("SnapNow test control: ignored a stop written before the current recording began")
+            handled[handled.count - 1]["ignored"] = "older than the current recording"
+            return
+        }
         let n = { (key: String, fallback: Double) in json[key] as? Double ?? fallback }
         let area = CGRect(x: n("x", 100), y: n("y", 100), width: n("w", 640), height: n("h", 400))
         switch action {
@@ -967,10 +1019,15 @@ enum RecorderTestControl {
             let full = json["fullScreen"] as? Bool ?? false
             let rect = full ? NSScreen.screens[0].frame : area
             Recorder.shared.start(rect: rect, microphone: json["mic"] as? Bool ?? false, showClicks: true,
-                                  synthetic: json["synthetic"] as? Bool ?? false) { ok in
+                                  synthetic: json["synthetic"] as? Bool ?? false, systemAudio: json["systemAudio"] as? Bool) { ok in
                 NSLog("SnapNow test: start \(ok ? "ok" : "failed")")
             }
-        case "stop": Recorder.shared.stop()
+        case "stop": Recorder.shared.stop(source: "test control: stop command")
+        case "transcribe":
+            if let p = json["path"] as? String {
+                transcriptPath = p
+                Transcripts.shared.make(URL(fileURLWithPath: p), manual: true)
+            }
         case "open": if let p = json["path"] as? String { Shell.shared.openEditor(URL(fileURLWithPath: p)) }
         case "draw": LiveDraw.shared.toggle()
         case "matrix": MatrixRain.shared.toggle()
@@ -981,6 +1038,12 @@ enum RecorderTestControl {
         case "status": writeStatus()
         default: Recorder.shared.diagnostic(action)
         }
+    }
+
+    /// A recording just ended: status.json at once (with lastEndReason), even if the app is about to quit.
+    static func recordingEnded() {
+        guard path != nil else { return }
+        writeStatus()
     }
 
     /// status.json next to the command file: what is running right now, for a script to check.
@@ -1003,6 +1066,16 @@ enum RecorderTestControl {
         status["dockApp"] = NSApp.activationPolicy() == .regular
         status["frontApp"] = NSWorkspace.shared.frontmostApplication?.localizedName ?? NSNull()
         status["newestCapture"] = files.max { modified($0) < modified($1) }?.path ?? NSNull()
+        if let p = transcriptPath { status["transcript"] = Transcripts.shared.state(p) }
+        status["recorder"] = r.diagnosticsSnapshot
+        status["lastEndReason"] = r.lastEnd ?? NSNull()
+        status["recentEnds"] = Recorder.recentEnds(10)
+        status["commands"] = handled
+        status["pid"] = Int(getpid())
+        status["launched"] = ISO8601DateFormatter().string(from: launched)
+        let me = getpid()
+        status["otherInstances"] = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .map(\.processIdentifier).filter { $0 != me }.map { Int($0) }
         status["time"] = ISO8601DateFormatter().string(from: Date())
         if let data = try? JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: folder.appendingPathComponent("status.json"), options: .atomic)

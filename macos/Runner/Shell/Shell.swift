@@ -24,6 +24,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let openEditorItem = NSMenuItem(title: "Open in Editor", action: #selector(toggleOpenEditor), keyEquivalent: "")
     private let copyImageItem = NSMenuItem(title: "Copy to Clipboard", action: #selector(toggleCopyImage), keyEquivalent: "")
     private let microphoneItem = NSMenuItem(title: "Record Microphone", action: #selector(toggleMicrophone), keyEquivalent: "")
+    private let systemAudioItem = NSMenuItem(title: "Record System Audio", action: #selector(toggleSystemAudio), keyEquivalent: "")
     private let liveDrawItem = NSMenuItem(title: "Draw Mode (double-tap ⌥)", action: #selector(toggleLiveDraw), keyEquivalent: "")
     private let drawNowItem = NSMenuItem(title: "Start Draw Mode Now", action: #selector(drawNow), keyEquivalent: "")
     private let drawPermItem = NSMenuItem(title: "", action: #selector(fixDrawPermission), keyEquivalent: "")
@@ -31,6 +32,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let altHandItem = NSMenuItem(title: "Option+Click Hand", action: #selector(toggleAltHand), keyEquivalent: "")
     private let recorder = Recorder.shared
     private var signalSources: [DispatchSourceSignal] = []
+    /// The signal that asked the app to quit, if one did (a recording's end says so).
+    static var quitSignal: String?
     private var wakeNotice: (String, String)?
     private var recordingTimer: Timer?
     private var countdownTimer: Timer?
@@ -149,7 +152,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         }
         menu.addItem(hotkeysItem)
         shortcutItems[.matrix] = matrixItem   // shows the rain's shortcut as its key equivalent
-        for entry in [microphoneItem, altHandItem, liveDrawItem, drawNowItem, matrixItem, drawPermItem, loginItem] {
+        for entry in [microphoneItem, systemAudioItem, altHandItem, liveDrawItem, drawNowItem, matrixItem, drawPermItem, loginItem] {
             entry.target = self
             menu.addItem(entry)
         }
@@ -255,6 +258,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         openEditorItem.state = defaults.bool(forKey: Prefs.openEditor) ? .on : .off
         copyImageItem.state = defaults.bool(forKey: Prefs.copyImage) ? .on : .off
         microphoneItem.state = defaults.bool(forKey: Prefs.microphone) ? .on : .off
+        systemAudioItem.state = Prefs.onByDefault(Prefs.systemAudio) ? .on : .off
         altHandItem.state = defaults.bool(forKey: Prefs.altClickHand) ? .on : .off
         liveDrawItem.state = defaults.bool(forKey: Prefs.liveDraw) ? .on : .off
         drawNowItem.title = LiveDraw.shared.active ? "End Draw Mode" : "Start Draw Mode Now"
@@ -369,14 +373,14 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         updateShortcutItems()
     }
 
-    func perform(_ action: ShortcutAction) {
+    func perform(_ action: ShortcutAction, source: String = "global shortcut") {
         switch action {
         case .region: captureRegion()
         case .scroll: captureScrolling()
         case .window: afterDelay { $0.capture(.window) }
         case .screen: afterDelay { $0.capture(.screen) }
         case .text: afterDelay { $0.grabText() }
-        case .record: toggleRecording()
+        case .record: toggleRecording(source: "\(source): Record Screen")
         case .library: showLibrary()
         case .matrix: MatrixRain.shared.toggle()
         }
@@ -612,8 +616,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
 
     // MARK: - Recording
 
-    func toggleRecording() {
-        if recorder.isRecording { stopRecording() } else { startRecording(fullScreen: false) }
+    func toggleRecording(source: String) {
+        if recorder.isRecording { recorder.stop(source: source) } else { startRecording(fullScreen: false) }
     }
 
     @objc private func startRecordingFromMenu() {
@@ -673,7 +677,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     }
 
     @objc private func stopRecording() {
-        recorder.stop()
+        recorder.stop(source: "menu: Stop Recording")
     }
 
     // MARK: - Test control (see RecorderTestControl)
@@ -702,16 +706,20 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         for sig in [SIGTERM, SIGINT, SIGHUP] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            source.setEventHandler { NSApp.terminate(nil) }
+            source.setEventHandler {
+                Shell.quitSignal = sig == SIGTERM ? "SIGTERM" : sig == SIGINT ? "SIGINT" : "SIGHUP"
+                NSLog("SnapNow: quit requested by \(Shell.quitSignal ?? "")")
+                NSApp.terminate(nil)
+            }
             source.resume()
             signalSources.append(source)
         }
         let workspace = NSWorkspace.shared.notificationCenter
         workspace.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.recorder.stop(reason: .sleep)
+            self?.recorder.stop(reason: .sleep, source: "system sleep (willSleepNotification)")
         }
         workspace.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.recorder.stop(reason: .quit)
+            self?.recorder.stop(reason: .quit, source: "logout or power off (willPowerOffNotification)")
         }
         workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let notice = self?.wakeNotice else { return }
@@ -721,8 +729,10 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         RecorderTestControl.install()
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             Task { @MainActor in
+                Transcripts.shared.resumeUnfinished()   // transcripts a quit cut short go on where they stopped
                 guard let found = await Recorder.recoverUnfinished() else { return }
                 SnapLiteNative.shared?.invoke("capturesChanged")
+                Transcripts.shared.make(found.url, manual: false)
                 NSSound(named: "Glass")?.play()
                 Toast.show("Recovered an unfinished recording (\(found.text))", symbol: "arrow.counterclockwise.circle.fill",
                            footnote: "\(found.url.lastPathComponent) is in the Library.", lasting: true)
@@ -752,6 +762,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
             NSSound(named: "Funk")?.play()
             SnapLiteNative.shared?.invoke("capturesChanged")
             let kept = summary.map { "What was written (\($0.text)) is in the Library." } ?? "Nothing was written."
+            if let summary { Transcripts.shared.make(summary.url, manual: false) }
             Toast.show("Recording stopped: \(why)", symbol: "exclamationmark.triangle.fill", footnote: kept, lasting: true)
         }
     }
@@ -762,6 +773,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         showIdleIcon()
         SnapLiteNative.shared?.invoke("capturesChanged")
         SnapLiteNative.shared?.invoke("recordingFinished", summary.url.path)
+        Transcripts.shared.make(summary.url, manual: false)   // in the background; a quit now is resumed at the next launch
         let message = "Recording saved (\(summary.text))"
         switch reason {
         case .quit:
@@ -793,6 +805,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     @objc private func toggleAltHand() { defaults.set(!defaults.bool(forKey: Prefs.altClickHand), forKey: Prefs.altClickHand) }
 
     @objc private func toggleMicrophone() { defaults.set(!defaults.bool(forKey: Prefs.microphone), forKey: Prefs.microphone) }
+    @objc private func toggleSystemAudio() { defaults.set(!Prefs.onByDefault(Prefs.systemAudio), forKey: Prefs.systemAudio) }
 
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp

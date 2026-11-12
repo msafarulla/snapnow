@@ -7,6 +7,9 @@ enum Prefs {
     static let openEditor = "openEditorAfterCapture"
     static let copyImage = "copyAfterCapture"
     static let microphone = "recordMicrophone"
+    static let systemAudio = "recordSystemAudio"            // on by default: the computer's sound goes into recordings
+    static let transcribe = "transcribeRecordings"          // on by default: a transcript after every recording
+    static let transcriptLanguage = "transcriptLanguage"    // a language identifier; empty = the system language
     /// Option+click anywhere shows the pointing hand (same as my browser automation). Default on.
     static let altClickHand = "altClickHand"
     /// Double-tap Option freezes the screen and opens it full-screen in the editor for drawing (session mode). Default on.
@@ -189,6 +192,15 @@ final class SettingsWindowController: NSWindowController {
                                           action: #selector(prefToggled(_:)), key: Prefs.copyImage))
         stack.addArrangedSubview(checkbox("Record the microphone with screen recordings", on: defaults.bool(forKey: Prefs.microphone),
                                           action: #selector(prefToggled(_:)), key: Prefs.microphone))
+        stack.addArrangedSubview(checkbox("Record the computer's sound with screen recordings", on: Prefs.onByDefault(Prefs.systemAudio),
+                                          action: #selector(prefToggled(_:)), key: Prefs.systemAudio))
+        let quality = NSPopUpButton(frame: .zero, pullsDown: false)
+        quality.addItems(withTitles: RecordingQuality.allCases.map(\.title))
+        quality.selectItem(at: RecordingQuality.allCases.firstIndex(of: RecordingQuality.current) ?? 1)
+        quality.target = self
+        quality.action = #selector(recordingQualityChosen(_:))
+        stack.addArrangedSubview(row("Recording quality", quality))
+        stack.addArrangedSubview(note("Recordings are HEVC. Standard keeps screen text sharp at about a gigabyte an hour or less; High keeps more detail, Small the least."))
         stack.addArrangedSubview(checkbox("Remember the last capture area (Enter re-captures it)", on: Prefs.offByDefault(Prefs.rememberArea),
                                           action: #selector(prefToggled(_:)), key: Prefs.rememberArea))
         stack.addArrangedSubview(checkbox("Stamp the date & time on captures (bottom-right)", on: Prefs.onByDefault(Prefs.stampTime),
@@ -214,6 +226,19 @@ final class SettingsWindowController: NSWindowController {
         fps.action = #selector(gifFpsChosen(_:))
         stack.addArrangedSubview(row("GIF frame rate", fps))
         stack.addArrangedSubview(note("For Save as Animated GIF and ⇧⌘C. More frames look smoother; fewer make smaller files."))
+
+        // Transcripts
+        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(heading("Transcripts"))
+        stack.addArrangedSubview(checkbox("Transcribe screen recordings", on: Prefs.onByDefault(Prefs.transcribe),
+                                          action: #selector(prefToggled(_:)), key: Prefs.transcribe))
+        let language = NSPopUpButton(frame: .zero, pullsDown: false)
+        language.target = self
+        language.action = #selector(transcriptLanguageChosen(_:))
+        fillLanguages(language)
+        stack.addArrangedSubview(row("Language", language))
+        stack.addArrangedSubview(note("Made on this Mac only: the sound never leaves it (a language's speech model may come from Apple once). "
+            + "A .txt with [mm:ss] lines and .srt captions go next to the movie. Older movies: right-click in the Library › Make Transcript."))
 
         // Watermark
         stack.addArrangedSubview(separator())
@@ -416,6 +441,26 @@ final class SettingsWindowController: NSWindowController {
         rebuild()
     }
 
+    /// The system language first, then every language this Mac can transcribe on-device (added when known).
+    private func fillLanguages(_ popup: NSPopUpButton) {
+        let chosen = UserDefaults.standard.string(forKey: Prefs.transcriptLanguage) ?? ""
+        func add(_ title: String, _ id: String) {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = id
+            popup.menu?.addItem(item)
+            if id == chosen { popup.select(item) }
+        }
+        add("System (\(TranscriptEngine.displayName(TranscriptEngine.systemLanguage)))", "")
+        if !chosen.isEmpty { add(TranscriptEngine.displayName(chosen), chosen) }
+        Task { @MainActor in
+            for id in await TranscriptEngine.supportedLanguages() where id != chosen { add(TranscriptEngine.displayName(id), id) }
+        }
+    }
+
+    @objc private func transcriptLanguageChosen(_ sender: NSPopUpButton) {
+        UserDefaults.standard.set(sender.selectedItem?.representedObject as? String ?? "", forKey: Prefs.transcriptLanguage)
+    }
+
     @objc private func prefToggled(_ sender: NSButton) {
         guard let key = sender.identifier?.rawValue else { return }
         UserDefaults.standard.set(sender.state == .on, forKey: key)
@@ -425,6 +470,10 @@ final class SettingsWindowController: NSWindowController {
     @objc private func saveAsFormatChosen(_ sender: NSPopUpButton) {
         let index = sender.indexOfSelectedItem
         UserDefaults.standard.set(index > 0 ? sender.titleOfSelectedItem : "", forKey: Prefs.saveAsFormat)
+    }
+
+    @objc private func recordingQualityChosen(_ sender: NSPopUpButton) {
+        UserDefaults.standard.set(RecordingQuality.allCases[sender.indexOfSelectedItem].rawValue, forKey: RecordingQuality.prefKey)
     }
 
     @objc private func gifFpsChosen(_ sender: NSPopUpButton) {

@@ -29,7 +29,7 @@ class AppDelegate: FlutterAppDelegate {
       self.quitReplied = true
       sender.reply(toApplicationShouldTerminate: true)
     }
-    Recorder.shared.stop(reason: .quit, done: reply)
+    Recorder.shared.stop(reason: .quit, source: "app quit" + (Shell.quitSignal.map { " (\($0))" } ?? " (Quit or the system)"), done: reply)
     DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: reply)   // never hold the quit for longer
     return .terminateLater
   }

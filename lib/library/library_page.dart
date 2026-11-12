@@ -8,6 +8,7 @@ import '../app/app_menu.dart';
 import '../app/theme.dart';
 import '../editor/editor_page.dart';
 import '../platform/native.dart';
+import 'transcripts.dart';
 
 /// The Library window, as in the Swift app: a grid of every capture (search, multi-select, right-click
 /// menu), and an edit mode (double-click) with the editor above a filmstrip of all captures. Dragging a
@@ -32,6 +33,7 @@ class LibraryPageState extends State<LibraryPage> {
   final _thumbs = <String, Future<Uint8List?>>{};
   final _gridFocus = FocusNode();
   final _filmScroll = ScrollController();
+  final _transcripts = <String, TranscriptInfo>{};
 
   EditorPageState? get _editor => AppController.instance.editorKey.currentState;
 
@@ -56,11 +58,13 @@ class LibraryPageState extends State<LibraryPage> {
     super.initState();
     _reload();
     AppController.instance.capturesVersion.addListener(_reload);
+    Native.onTranscriptChanged = _transcriptChanged;
   }
 
   @override
   void dispose() {
     AppController.instance.capturesVersion.removeListener(_reload);
+    if (Native.onTranscriptChanged == _transcriptChanged) Native.onTranscriptChanged = null;
     super.dispose();
   }
 
@@ -88,6 +92,91 @@ class LibraryPageState extends State<LibraryPage> {
       _files = [for (final e in entries) e.$1];
       _selected.removeWhere((p) => !_files.any((f) => f.path == p));
     });
+    _loadTranscripts();
+  }
+
+  // ---- Transcripts (made natively, on this Mac only; see TranscriptInfo) ----
+
+  void _transcriptChanged(Map<Object?, Object?> info) {
+    final path = info['path'];
+    if (path is! String || !mounted) return;
+    setState(() => _transcripts[path] = TranscriptInfo.fromMap(info));
+  }
+
+  /// Each movie's transcript state: a badge on its tile, or progress while one is being made.
+  Future<void> _loadTranscripts() async {
+    final movies = [for (final f in _files) if (_movies.contains(_ext(f.path))) f.path];
+    if (movies.isEmpty) return;
+    try {
+      final states = await Native.transcriptStates(movies);
+      if (!mounted) return;
+      setState(() {
+        for (final e in states.entries) {
+          _transcripts[e.key] = TranscriptInfo.fromMap(e.value);
+        }
+      });
+    } catch (_) {} // no native side (tests): no badges
+  }
+
+  Future<void> _showTranscript(String movie) async {
+    final String text;
+    try {
+      text = await File(TranscriptFiles.textPath(movie)).readAsString();
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(_name(movie), maxLines: 1, overflow: TextOverflow.ellipsis),
+        content: SizedBox(
+          width: 640,
+          height: 420,
+          child: Scrollbar(child: SingleChildScrollView(child: SelectableText(text, style: const TextStyle(fontSize: 13, height: 1.45)))),
+        ),
+        actions: [
+          TextButton(onPressed: () => Native.reveal(TranscriptFiles.textPath(movie)), child: const Text('Show in Finder')),
+          TextButton(onPressed: () => Native.copyText(text), child: const Text('Copy')),
+          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _copyTranscript(String movie) async {
+    try {
+      await Native.copyText(await File(TranscriptFiles.textPath(movie)).readAsString());
+    } catch (_) {}
+  }
+
+  /// A new name for a capture; a movie's transcript files are renamed with it.
+  Future<void> _rename(String path) async {
+    final controller = TextEditingController(text: _name(path));
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename'),
+        content: SizedBox(
+          width: 380,
+          child: TextField(controller: controller, autofocus: true, onSubmitted: (v) => Navigator.pop(context, v)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('Rename')),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (name == null || name.trim().isEmpty || name.trim() == _name(path)) return;
+    try {
+      final moved = await Native.renameCapture(path, name.trim());
+      _transcripts.remove(path);
+      _reload();
+      if (moved != null && mounted) setState(() => _selected..clear()..add(moved));
+    } on PlatformException catch (e) {
+      await Native.toast(e.message ?? 'Could not rename it', symbol: 'exclamationmark.triangle.fill');
+    }
   }
 
   List<File> get _shown {
@@ -247,6 +336,9 @@ class LibraryPageState extends State<LibraryPage> {
     if (!_selected.contains(path)) setState(() { _selected..clear()..add(path); _anchor = path; });
     final paths = _selection;
     final single = paths.length == 1 ? paths.first : null;
+    final movie = single != null && _movies.contains(_ext(single)) ? single : null;
+    final transcript = movie == null ? const TranscriptInfo() : _transcripts[movie] ?? const TranscriptInfo();
+    final hasText = movie != null && TranscriptFiles.hasText(movie);
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final choice = await showMenu<String>(
       context: context,
@@ -257,6 +349,19 @@ class LibraryPageState extends State<LibraryPage> {
         if (single != null && _isImage(single)) const PopupMenuItem(value: 'text', child: Text('Copy Text')),
         const PopupMenuItem(value: 'reveal', child: Text('Show in Finder')),
         if (single != null && _movies.contains(_ext(single))) const PopupMenuItem(value: 'gif', child: Text('Export as GIF')),
+        if (movie != null) ...[
+          const PopupMenuDivider(),
+          if (hasText) const PopupMenuItem(value: 'showTranscript', child: Text('Show Transcript')),
+          if (hasText) const PopupMenuItem(value: 'copyTranscript', child: Text('Copy Transcript')),
+          if (transcript.busy)
+            PopupMenuItem(enabled: false, child: Text(transcript.label))
+          else ...[
+            if (transcript.state == TranscriptState.failed)
+              PopupMenuItem(enabled: false, child: Text(transcript.label, maxLines: 2, overflow: TextOverflow.ellipsis)),
+            PopupMenuItem(value: 'makeTranscript', child: Text(hasText ? 'Make Transcript Again' : 'Make Transcript')),
+          ],
+        ],
+        if (single != null && single != _editingPath) const PopupMenuItem(value: 'rename', child: Text('Rename…')),
         const PopupMenuDivider(),
         const PopupMenuItem(value: 'trash', child: Text('Move to Trash')),
       ],
@@ -267,6 +372,10 @@ class LibraryPageState extends State<LibraryPage> {
       case 'text': await Native.copyTextOfFile(single!);
       case 'reveal': await Native.reveal(paths.first);
       case 'gif': await Native.exportGif(single!);
+      case 'showTranscript': await _showTranscript(single!);
+      case 'copyTranscript': await _copyTranscript(single!);
+      case 'makeTranscript': await Native.makeTranscript(single!);
+      case 'rename': await _rename(single!);
       case 'trash': await _trash(paths);
     }
   }
@@ -379,6 +488,7 @@ class LibraryPageState extends State<LibraryPage> {
         thumb: _thumb(path),
         selected: _selected.contains(path),
         badge: _movies.contains(_ext(path)) ? Icons.videocam : _ext(path) == 'gif' ? Icons.gif_box_outlined : null,
+        transcript: _transcripts[path],
         onDelete: () => _trash([path]),
       ),
     );
@@ -435,6 +545,7 @@ class LibraryPageState extends State<LibraryPage> {
         selected: path == _editingPath,
         compact: true,
         badge: _movies.contains(_ext(path)) ? Icons.videocam : null,
+        transcript: _transcripts[path],
         onDelete: () => _trashFromFilmstrip(path),
       ),
     );
@@ -465,9 +576,11 @@ class _Tile extends StatefulWidget {
   final bool selected, compact;
   final IconData? badge;
   final VoidCallback? onDelete;
+  /// A movie's transcript: a CC mark when it has one, a progress ring while it is being made.
+  final TranscriptInfo? transcript;
 
   const _Tile({required this.path, required this.name, required this.thumb, required this.selected,
-      this.compact = false, this.badge, this.onDelete});
+      this.compact = false, this.badge, this.onDelete, this.transcript});
 
   @override
   State<_Tile> createState() => _TileState();
@@ -511,6 +624,27 @@ class _TileState extends State<_Tile> {
                 padding: const EdgeInsets.all(3),
                 decoration: const BoxDecoration(color: Color(0x99000000), shape: BoxShape.circle),
                 child: Icon(w.badge, size: 12, color: Colors.white),
+              ),
+            ),
+          if (w.transcript case final t? when t.busy || t.state == TranscriptState.done || t.state == TranscriptState.failed)
+            Positioned(
+              right: 4,
+              bottom: 4,
+              child: Tooltip(
+                message: t.label,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(color: Color(0x99000000), shape: BoxShape.circle),
+                  child: t.busy
+                      ? SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white, value: t.state == TranscriptState.running && t.progress > 0 ? t.progress : null),
+                        )
+                      : Icon(t.state == TranscriptState.failed ? Icons.closed_caption_disabled_outlined : Icons.closed_caption,
+                          size: 12, color: Colors.white),
+                ),
               ),
             ),
         ]),
