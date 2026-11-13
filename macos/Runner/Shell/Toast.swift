@@ -514,7 +514,7 @@ final class LiveDraw {
             downAt = nil
             let now = Date()
             if !dirty, now.timeIntervalSince(down) < 0.3 {
-                if let last = lastTap, now.timeIntervalSince(last) < 0.45 { lastTap = nil; toggle() } else { lastTap = now }
+                if let last = lastTap, now.timeIntervalSince(last) < 0.45 { lastTap = nil; doubleTap() } else { lastTap = now }
             } else {
                 lastTap = nil
             }
@@ -524,6 +524,9 @@ final class LiveDraw {
     }
 
     private var editorWindow: NSWindow? { NSApp.windows.first { $0 is MainFlutterWindow } }
+
+    /// A double-tap of Option: always draw mode, on or off. The Matrix rain has its own shortcut and menu item.
+    func doubleTap() { toggle() }
 
     func toggle() {
         if leaving { openWhenDone.toggle(); return }   // a double-tap while the last session is still being saved
@@ -853,15 +856,18 @@ final class LiveDraw {
 
     private var leaving = false
 
-    /// Asks the editor whether anything is drawn on the glass (picks the closing animation); false after 0.25 s without an answer.
-    @MainActor private func drawHasMarks() async -> Bool {
+    /// Asks the editor a yes/no [method]: "drawHasMarks" (anything drawn on the glass? picks the fly animation) or
+    /// "drawFadeOut" (the marks go one by one, each flying into [argument], the menu bar icon as [x, y] from the window's top
+    /// left, or fading without it; answers when the last is gone, false at once with nothing drawn).
+    /// False after [within] seconds without an answer, so the glass always lifts.
+    @MainActor private func askEditor(_ method: String, _ argument: Any? = nil, within: TimeInterval) async -> Bool {
         guard let invoker = SnapLiteNative.shared else { return false }
         final class Once { var done = false }
         let once = Once()
         return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             let finish = { (v: Bool) in if !once.done { once.done = true; c.resume(returning: v) } }
-            invoker.invoke("drawHasMarks") { finish(($0 as? Bool) ?? false) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { finish(false) }
+            invoker.invoke(method, argument) { finish(($0 as? Bool) ?? false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + within) { finish(false) }
         }
     }
 
@@ -897,7 +903,8 @@ final class LiveDraw {
     private var openWhenDone = false
 
     /// Lifting the glass. At once: the glass stops taking the mouse, the keyboard goes back to the app you were in, and the
-    /// glass vanishes (or, with markup and the closing animation on, it lives on only as the click-through animation picture).
+    /// glass vanishes (Settings › Draw mode › Closing: "One by one" first sends each mark into the menu bar icon in turn, on the click-through glass;
+    /// "Fly" lets it live on only as the click-through animation picture).
     /// Then, in the background: the screen behind it (grabbed first, before anything changes) becomes the picture under the
     /// drawing and the whole is saved as a normal capture (every mark still editable); an empty glass leaves nothing behind.
     private func leave() {
@@ -907,11 +914,12 @@ final class LiveDraw {
         if let o = activeObserver { NotificationCenter.default.removeObserver(o); activeObserver = nil }
         sampling?.cancel(); lastRects = []
         let screen = w.screen ?? drawScreen ?? NSScreen.main
-        let animate = Prefs.onByDefault(Prefs.liveDrawCloseAnimation)
+        let close = DrawClose.current
+        let animate = close == .fly
         // 1. Input and focus back, now. The window stays ordered in (alpha 0 later) until Dart has saved: a hidden Flutter
         // window paints nothing, and the save may need it; click-through and inactive, it is in nobody's way.
         w.ignoresMouseEvents = true
-        if !animate { removeFrost(); w.alphaValue = 0 }
+        if close == .off { removeFrost(); w.alphaValue = 0 }
         if let prev = previousApp, !prev.isTerminated {
             prev.activate(options: [])            // it is on this Space, so nothing switches
         } else {
@@ -924,9 +932,23 @@ final class LiveDraw {
             async let grabbed = self.grabScreen(screen)
             // 3. The glass: with markup and the animation on, a picture of it flies to the menu bar icon in its own
             // click-through window; otherwise it just vanishes. Nothing here waits for the save.
-            if animate {
+            if close == .fade {
+                // The tools go at once and the marks leave one by one, newest first, on the glass itself: each shrinks along
+                // an arc into the menu bar icon, as the whole drawing does with "All at once" (Reduce Motion: each only
+                // fades). At most ~1.3 s, however much is drawn; the glass goes when the last has, at once with nothing
+                // drawn. Only on screen: the save below still has every mark.
+                self.removeFrost()
+                var icon: [Double]?
+                if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    let p = DrawCloseAnimation.iconPoint(in: w.frame) ?? CGPoint(x: w.frame.width - 80, y: w.frame.height - 12)
+                    icon = [Double(p.x), Double(w.frame.height - p.y)]
+                }
+                let flown = await self.askEditor("drawFadeOut", icon, within: 2)
+                w.alphaValue = 0
+                if flown, icon != nil { DrawCloseAnimation.pulseIcon() }
+            } else if animate {
                 async let picture = DrawCloseAnimation.snapshot(of: w)
-                let drawn = await self.drawHasMarks()
+                let drawn = await self.askEditor("drawHasMarks", within: 0.25)
                 if !drawn { self.removeFrost(); w.alphaValue = 0 }
                 let image = await picture
                 if drawn, let image {
@@ -1056,7 +1078,7 @@ enum DrawCloseAnimation {
     }
 
     /// Centre of the SnapNow menu bar icon in the animation window's coordinates, or nil when it is on another display.
-    private static func iconPoint(in frame: NSRect) -> CGPoint? {
+    static func iconPoint(in frame: NSRect) -> CGPoint? {
         guard let b = Shell.shared.statusButton, let bw = b.window else { return nil }
         let r = bw.convertToScreen(b.convert(b.bounds, to: nil))
         let c = CGPoint(x: r.midX, y: r.midY)
@@ -1065,7 +1087,7 @@ enum DrawCloseAnimation {
     }
 
     /// One small bounce of the menu bar icon: "caught and stored".
-    private static func pulseIcon() {
+    static func pulseIcon() {
         guard let b = Shell.shared.statusButton else { return }
         b.wantsLayer = true
         guard let l = b.layer else { return }

@@ -64,6 +64,7 @@ class AppController with TrayListener, WindowListener {
     Native.onCursorKick = () => editorKey.currentState?.kickCursor();
     Native.onCloseDraw = closeDraw;
     Native.onDrawHasMarks = () => editorKey.currentState?.hasDrawMarks ?? false;
+    Native.onDrawFadeOut = (flyTo) async => await editorKey.currentState?.fadeOutDraw(flyTo: flyTo) ?? false;
     Native.onShowLibrary = showLibrary;
     Native.onCapturesChanged = () => capturesVersion.value++;
     Native.onAppearanceChanged = (choice) => appearance.value = choice;
@@ -125,6 +126,7 @@ class AppController with TrayListener, WindowListener {
   Future<bool> closeDraw(String? shot) async {
     var kept = false;
     if (shot != null) kept = await editorKey.currentState?.finishDraw(shot) ?? false;
+    editorKey.currentState?.clearDrawFade(); // the glass is already gone: the marks faded only on screen
     drawing = false;
     GestureBinding.instance.resamplingEnabled = false;
     libraryKey.currentState?.closeDraw();

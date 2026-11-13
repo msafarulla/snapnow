@@ -375,6 +375,17 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   int? _playId;
   double _playT = 1;
   Timer? _playTimer;
+  /// Draw mode being lifted (fadeOutDraw): the tools are hidden and each mark's opacity (id → 0…1) runs down in turn.
+  bool _vanishing = false;
+  Map<int, double>? _fadeOut;
+  /// With _fadeOut: each mark flies from its centre (id → image point) into _flyTo (the menu bar icon, image coordinates).
+  Map<int, Rect>? _flyFrom;
+  Offset? _flyTo;
+  Timer? _fadeTimer;
+  Completer<bool>? _fadeDone;
+  static const _fadeEach = 350;  // ms one mark takes to go (the all-at-once animation's time)
+  static const _fadeGap = 110;   // ms from one mark setting off to the next
+  static const _fadeAll = 1300;  // ms the whole may take, however much is drawn
   /// Resizing the canvas by its square handles: handle index, new rect (image coords), grab offset.
   (int, Rect, Offset)? _canvasDrag;
   double _viewScale = 1; // view points per image point (x), from the last layout
@@ -582,6 +593,22 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     return p.computeMetrics().isEmpty ? null : p.getBounds();
   }
 
+  /// The box a mark flies from when draw mode is lifted (its centre sets off; it also bounds the mark's fade layer): text,
+  /// callouts (with their tail), steps, boxes, ellipses and logos by their bounds, arrows, lines and pen strokes by their
+  /// drawn path. Null for a mark with no extent (it then only fades).
+  Rect? _flightBox(Annotation a) {
+    var b = _annBounds(a) ?? _boxOf(a);
+    if (a.shape case CalloutShape(:final tail?)) b = b.expandToInclude(Rect.fromPoints(tail, tail));
+    return b == Rect.zero ? null : b;
+  }
+
+  /// A point in the window (points from its top left, as the native side sends it) in image coordinates.
+  Offset _windowToImage(Offset p) {
+    final box = _canvasKey.currentContext?.findRenderObject() as RenderBox?;
+    final local = box != null && box.hasSize ? box.globalToLocal(p) : p - _viewOrigin;
+    return Offset(local.dx / _viewScale, local.dy / _viewScaleY);
+  }
+
   /// Outline boxes for the grouped peers (not the anchor, which shows its own handles).
   List<Rect> _groupBoxes() => [
         for (final id in _group)
@@ -680,6 +707,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     _antsTimer?.cancel();
     _marchTimer?.cancel();
     _playTimer?.cancel();
+    _fadeTimer?.cancel();
     _march.dispose();
     super.dispose();
   }
@@ -1540,6 +1568,66 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   /// Whether anything is drawn on the glass right now (draw mode's closing animation flies only then).
   bool get hasDrawMarks => _state?.annotations.isNotEmpty ?? false;
+
+  @visibleForTesting
+  Map<int, double>? get drawFade => _fadeOut;
+  @visibleForTesting
+  Offset? get drawFlyTo => _flyTo;
+  @visibleForTesting
+  Map<int, Rect>? get drawFlyFrom => _flyFrom;
+
+  /// Draw mode is being lifted: the tools go at once and the marks fade away one by one, the newest first (the reverse of
+  /// the order they were drawn), each over [_fadeEach] ms, [_fadeGap] ms apart. With many marks they come closer together
+  /// and fade quicker so the whole never takes more than [_fadeAll] ms. Completes when the last is gone: true, or false at
+  /// once when nothing is drawn. Purely on screen: the annotations stay in the state, so the capture saved next
+  /// ([finishDraw]) has every one; [clearDrawFade] shows them again.
+  ///
+  /// With [flyTo] (the menu bar icon, in this view's coordinates) each mark goes the way the whole drawing does in the
+  /// all-at-once animation: it shrinks along a slight arc into that point. Without it (Reduce Motion) each only fades.
+  Future<bool> fadeOutDraw({Offset? flyTo}) {
+    final st = _state;
+    if (!widget.overlay || st == null || st.annotations.isEmpty) return Future.value(false);
+    if (_fadeDone case final running?) return running.future;
+    _endTextEdit();
+    final ids = [for (final a in _state!.annotations.reversed) a.id];
+    final n = ids.length;
+    if (n == 0) return Future.value(false); // only an empty text was being typed: it went with _endTextEdit
+    var each = _fadeEach.toDouble(), gap = _fadeGap.toDouble();
+    if (n > 1 && each + gap * (n - 1) > _fadeAll) {
+      gap = (_fadeAll - each) / (n - 1);                // more marks: closer together
+      each = math.max(flyTo == null ? 60.0 : 220.0, math.min(each, gap * 2.5));  // and quicker (a flight stays long enough to see)
+      gap = (_fadeAll - each) / (n - 1);
+    }
+    final total = each + gap * (n - 1);
+    final done = _fadeDone = Completer<bool>();
+    final clock = Stopwatch()..start();
+    setState(() {
+      _vanishing = true; _selection = null; _group.clear(); _fadeOut = {for (final id in ids) id: 1.0};
+      _flyTo = flyTo == null ? null : _windowToImage(flyTo);
+      _flyFrom = flyTo == null ? null : {for (final a in _state!.annotations) if (_flightBox(a) case final b?) a.id: b};
+    });
+    _fadeTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) {
+      final ms = clock.elapsedMilliseconds.toDouble();
+      if (!mounted || _fadeOut == null) { timer.cancel(); if (!done.isCompleted) done.complete(true); return; }
+      setState(() => _fadeOut = {
+            for (var i = 0; i < n; i++)
+              ids[i]: 1 - Curves.easeIn.transform(((ms - gap * i) / each).clamp(0.0, 1.0)),
+          });
+      if (ms >= total) { timer.cancel(); if (!done.isCompleted) done.complete(true); }
+    });
+    return done.future;
+  }
+
+  /// The marks show again and the tools come back (after the glass is gone; the next session starts clean).
+  void clearDrawFade() {
+    _fadeTimer?.cancel();
+    _fadeTimer = null;
+    if (_fadeDone case final d? when !d.isCompleted) d.complete(true);
+    _fadeDone = null;
+    if (!_vanishing && _fadeOut == null) return;
+    void reset() { _vanishing = false; _fadeOut = null; _flyFrom = null; _flyTo = null; }
+    if (mounted) { setState(reset); } else { reset(); }
+  }
 
   /// Draw mode ended with the screen as it was behind the glass in [shotPath]: that picture goes under whatever was drawn
   /// and the whole is saved (picture + markup, so every mark stays editable) as a normal capture. False when nothing was drawn.
@@ -2572,13 +2660,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
         // only the copy at the pointer shows. Dimmed instead, it still read as a second strip on draw mode's clear glass.
         // The KeyedSubtree hugs the card itself (grip included), so the rect sent to the frost and the brightness sampling
         // is the strip's real shape, the smaller one when it is shrunk.
-        dock(_toolbarLeft, Opacity(opacity: dragging ? 0 : 1, child: _drawStripDock())),
+        // While draw mode is being lifted (fadeOutDraw) the strip and panel are invisible but keep their place, so the
+        // rects already sent to the frost do not change.
+        dock(_toolbarLeft, Opacity(opacity: dragging || _vanishing ? 0 : 1, child: _drawStripDock())),
         if (_inspectorOn)
           Positioned(
             top: m,
             right: m,
             bottom: m + widget.chromeInsets.bottom,
-            child: KeyedSubtree(key: _glassPanelKey, child: _tone(_panelBright, PropertiesPanel(host: this, onClose: _toggleInspector))),
+            child: Opacity(opacity: _vanishing ? 0 : 1,
+                child: KeyedSubtree(key: _glassPanelKey, child: _tone(_panelBright, PropertiesPanel(host: this, onClose: _toggleInspector)))),
           ),
         if (_toolbarDragAt case final at?) ...[
           // The dock the drop would land in, lit up
@@ -2795,7 +2886,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                         left: origin.dx, top: origin.dy, width: fitted.width, height: fitted.height,
                         child: ClipRect(child: RepaintBoundary(child: CustomPaint(
                           isComplex: true,
-                          painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY, clearBase: widget.overlay,
+                          painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY, clearBase: widget.overlay, fade: _fadeOut, flyFrom: _flyFrom, flyTo: _flyTo,
                               hiddenTextId: _textEdit?.id, march: _march, epicycles: _playId != null && BuildUpGif.fourier,
                               envelope: _playId != null && BuildUpGif.envelope,
                               animate: state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches),

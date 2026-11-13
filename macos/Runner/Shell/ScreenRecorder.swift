@@ -968,7 +968,8 @@ private final class BorderView: NSView {
 ///   "resume", "drop"; "transcribe" ("path": a movie: makes its transcript now, as Make Transcript; status.json then has
 ///   "transcript" with its state, progress and sidecar paths);
 ///   "open" ("path": an image opened in the editor, as from Recent Captures),
-///   "draw" (draw mode on/off, as a double-tap of Option), "matrix" (the rain on/off), "icon" (a left click on the menu
+///   "draw" (draw mode on/off, as Start Draw Mode Now), "doubletap" (a double-tap of Option: always draw mode on/off),
+///   "matrix" (the rain on/off), "icon" (a left click on the menu
 ///   bar icon), "region" ("x","y","w","h": a region capture of that area without the picker), "screen" (Capture Full
 ///   Screen), "scroll" ("x","y","w","h": a scrolling capture of that area), "status" (writes status.json next to the
 ///   command file: recording, draw mode, rain, panel, editor window, Dock or menu bar app, front app, newest capture).
@@ -1030,6 +1031,7 @@ enum RecorderTestControl {
             }
         case "open": if let p = json["path"] as? String { Shell.shared.openEditor(URL(fileURLWithPath: p)) }
         case "draw": LiveDraw.shared.toggle()
+        case "doubletap": LiveDraw.shared.doubleTap()
         case "matrix": MatrixRain.shared.toggle()
         case "icon": Shell.shared.testIconClick()
         case "region": Shell.shared.testRegionCapture(area)

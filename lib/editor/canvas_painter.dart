@@ -28,16 +28,54 @@ class CanvasPainter extends CustomPainter {
   /// Draw mode: the base picture is fully transparent (the glass), so it is not drawn at all. On a 5K display that image is
   /// ~15 megapixels, redrawn (mipmapped) on every repaint for nothing.
   final bool clearBase;
+  /// Draw mode being lifted: how much of each annotation still shows (id → 0…1; missing = all of it). Only the glass on
+  /// screen gets it; what is saved is painted without it. Null draws everything as it is.
+  final Map<int, double>? fade;
+  /// With [fade]: each annotation leaves by flying from the centre of its box ([flyFrom], id → its bounds in image
+  /// coordinates) into [flyTo] (the menu bar icon, image coordinates), shrinking on the way, instead of only fading. The box
+  /// also bounds the layer of its final fade, so many marks in flight never mean many display-sized layers. Null: a plain fade.
+  final Map<int, Rect>? flyFrom;
+  final Offset? flyTo;
 
   /// [animate] makes the painter repaint on every [march] tick: only wanted when a committed annotation
   /// actually marches, so the editor's cached picture layer isn't re-rasterised 25× a second for nothing.
   CanvasPainter({required this.state, required this.selectionId, required this.scale, this.scaleY, this.hiddenTextId,
-      this.progress, this.march, this.epicycles = false, this.envelope = false, this.clearBase = false, bool animate = false})
+      this.progress, this.march, this.epicycles = false, this.envelope = false, this.clearBase = false, this.fade, this.flyFrom, this.flyTo, bool animate = false})
       : super(repaint: animate ? march : null);
 
   double get _sy => scaleY ?? scale; // vertical scale, == scale unless a non-proportional editor resize set it
 
   double _shown(Annotation a) => progress == null ? 1 : progress![a.id] ?? 0;
+
+  double _opacity(Annotation a) => fade == null ? 1 : fade![a.id] ?? 1;
+
+  /// Runs [draw] at [opacity]: through a layer only while the annotation is fading out (draw mode's closing).
+  static void _faded(Canvas canvas, double opacity, void Function() draw, {Rect? bounds}) {
+    if (opacity >= 1) return draw();
+    canvas.saveLayer(bounds, Paint()..color = Colors.black.withValues(alpha: opacity));
+    draw();
+    canvas.restore();
+  }
+
+  /// Runs [draw] for an annotation that is leaving ([opacity] 1 → 0 is its way out): with [flyTo] it shrinks along a slight
+  /// arc into that point (the same path, scale and fade as the all-at-once animation: 3% size, fading over the last
+  /// third); without, it only fades.
+  void _leaving(Canvas canvas, Annotation a, double opacity, void Function() draw) {
+    final box = flyFrom?[a.id], to = flyTo;
+    if (opacity >= 1 || box == null || to == null) return _faded(canvas, opacity, draw);
+    final from = box.center;
+    final p = 1 - opacity, q = opacity;
+    final bend = Offset(from.dx + (to.dx - from.dx) * 0.2, from.dy + (to.dy - from.dy) * 0.95);
+    final at = from * (q * q) + bend * (2 * q * p) + to * (p * p);
+    final size = 1 - 0.97 * p;
+    canvas.save();
+    canvas.translate(at.dx, at.dy);
+    canvas.scale(size);
+    canvas.translate(-from.dx, -from.dy);
+    // The layer hugs the mark (generous room for heads, outlines, shadows and halos), in its own, unscaled coordinates
+    _faded(canvas, p < 0.65 ? 1 : (1 - p) / 0.35, draw, bounds: box.inflate(48 + a.lineWidth * 8));
+    canvas.restore();
+  }
 
   /// [march] for the paint in progress (the static draw helpers read it), 0 outside one.
   static double _marchNow = 0;
@@ -74,13 +112,13 @@ class CanvasPainter extends CustomPainter {
     // Blur patches first, then spotlight dimming, then the rest in order.
     final spotlights = <(Rect, double)>[];
     for (final a in state.annotations) {
-      final t = _shown(a);
-      if (t <= 0) continue;
+      final t = _shown(a), o = _opacity(a);
+      if (t <= 0 || o <= 0) continue;
       switch (a.shape) {
         case BlurShape():
-          drawPartial(canvas, a, t, base: img);
+          _faded(canvas, o, () => drawPartial(canvas, a, t, base: img));
         case SpotlightShape(:final rect):
-          spotlights.add((rect, t));
+          spotlights.add((rect, t * o));
         default:
           break;
       }
@@ -90,16 +128,17 @@ class CanvasPainter extends CustomPainter {
     var step = 0;
     for (final a in state.annotations) {
       if (a.shape is StepShape) step += 1; // steps keep their final numbers while the others are still hidden
-      final t = _shown(a);
-      if (t <= 0) continue;
+      final t = _shown(a), o = _opacity(a);
+      if (t <= 0 || o <= 0) continue;
       switch (a.shape) {
         case BlurShape():
         case SpotlightShape():
           continue;
         case StepShape():
-          drawPartial(canvas, a, t, number: step);
+          final number = step;
+          _leaving(canvas, a, o, () => drawPartial(canvas, a, t, number: number));
         default:
-          drawPartial(canvas, a, t, hideText: a.id == hiddenTextId, envelope: envelope);
+          _leaving(canvas, a, o, () => drawPartial(canvas, a, t, hideText: a.id == hiddenTextId, envelope: envelope));
           if (epicycles && t < 1) Epicycles.of(a)?.paint(canvas, Curves.easeInOut.transform(t), a.color, scale);
       }
     }
@@ -1014,7 +1053,7 @@ class CanvasPainter extends CustomPainter {
   bool shouldRepaint(covariant CanvasPainter old) =>
       old.state != state || old.selectionId != selectionId || old.scale != scale || old.scaleY != scaleY ||
       old.hiddenTextId != hiddenTextId || old.progress != progress || old.march != march || old.epicycles != epicycles ||
-      old.envelope != envelope;
+      old.envelope != envelope || old.fade != fade || old.flyFrom != flyFrom || old.flyTo != flyTo;
 }
 
 /// The kinds of handle on a selected arrow or line.

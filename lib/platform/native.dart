@@ -15,6 +15,9 @@ class Native {
   static Future<bool> Function(String? shot)? onCloseDraw;
   /// Draw mode is about to lift: is anything drawn on the glass? (picks the closing animation)
   static bool Function()? onDrawHasMarks;
+  /// Draw mode is being lifted: what is drawn goes one mark after another, each flying into [flyTo] (the menu bar icon, in
+  /// the window's coordinates from the top left) or, without it, fading; true when done, false when nothing was drawn.
+  static Future<bool> Function(Offset? flyTo)? onDrawFadeOut;
   /// Draw mode: how bright the screen is behind the toolbar and the panel (0 black ... 1 white), about every 0.7 s.
   static void Function(List<double> luma)? onGlassLuma;
   static void Function()? onShowLibrary;
@@ -32,6 +35,9 @@ class Native {
         case 'cursorKick': onCursorKick?.call();
         case 'closeDraw': return await onCloseDraw?.call(call.arguments as String?) ?? false;
         case 'drawHasMarks': return onDrawHasMarks?.call() ?? false;
+        case 'drawFadeOut':
+          final to = call.arguments is List ? (call.arguments as List).map((e) => (e as num).toDouble()).toList() : null;
+          return await onDrawFadeOut?.call(to != null && to.length == 2 ? Offset(to[0], to[1]) : null) ?? false;
         case 'glassLuma': onGlassLuma?.call((call.arguments as List).map((e) => (e as num).toDouble()).toList());
         case 'showLibrary': onShowLibrary?.call();
         case 'capturesChanged': onCapturesChanged?.call();
