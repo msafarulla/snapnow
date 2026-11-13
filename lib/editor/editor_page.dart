@@ -383,9 +383,6 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   Offset? _flyTo;
   Timer? _fadeTimer;
   Completer<bool>? _fadeDone;
-  static const _fadeEach = 350;  // ms one mark takes to go (the all-at-once animation's time)
-  static const _fadeGap = 110;   // ms from one mark setting off to the next
-  static const _fadeAll = 1300;  // ms the whole may take, however much is drawn
   /// Resizing the canvas by its square handles: handle index, new rect (image coords), grab offset.
   (int, Rect, Offset)? _canvasDrag;
   double _viewScale = 1; // view points per image point (x), from the last layout
@@ -1576,15 +1573,16 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   @visibleForTesting
   Map<int, Rect>? get drawFlyFrom => _flyFrom;
 
-  /// Draw mode is being lifted: the tools go at once and the marks fade away one by one, the newest first (the reverse of
-  /// the order they were drawn), each over [_fadeEach] ms, [_fadeGap] ms apart. With many marks they come closer together
-  /// and fade quicker so the whole never takes more than [_fadeAll] ms. Completes when the last is gone: true, or false at
-  /// once when nothing is drawn. Purely on screen: the annotations stay in the state, so the capture saved next
-  /// ([finishDraw]) has every one; [clearDrawFade] shows them again.
+  /// Draw mode is being lifted: the tools go at once and the marks leave one by one, the newest first (the reverse of
+  /// the order they were drawn), at the pace of [speed] (see [DrawCloseSpeed.timing]: with many marks they come closer
+  /// together first and only then go quicker, so the whole never takes more than its cap). Completes when the last is
+  /// gone: true, or false at once when nothing is drawn. Purely on screen: the annotations stay in the state, so the
+  /// capture saved next ([finishDraw]) has every one; [clearDrawFade] shows them again.
   ///
   /// With [flyTo] (the menu bar icon, in this view's coordinates) each mark goes the way the whole drawing does in the
-  /// all-at-once animation: it shrinks along a slight arc into that point. Without it (Reduce Motion) each only fades.
-  Future<bool> fadeOutDraw({Offset? flyTo}) {
+  /// all-at-once animation: it shrinks along a slight arc into that point. Without it (Reduce Motion) each only fades,
+  /// at the Fast pace whatever [speed] says (as before there was a choice).
+  Future<bool> fadeOutDraw({Offset? flyTo, DrawCloseSpeed speed = DrawCloseSpeed.standard}) {
     final st = _state;
     if (!widget.overlay || st == null || st.annotations.isEmpty) return Future.value(false);
     if (_fadeDone case final running?) return running.future;
@@ -1592,12 +1590,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     final ids = [for (final a in _state!.annotations.reversed) a.id];
     final n = ids.length;
     if (n == 0) return Future.value(false); // only an empty text was being typed: it went with _endTextEdit
-    var each = _fadeEach.toDouble(), gap = _fadeGap.toDouble();
-    if (n > 1 && each + gap * (n - 1) > _fadeAll) {
-      gap = (_fadeAll - each) / (n - 1);                // more marks: closer together
-      each = math.max(flyTo == null ? 60.0 : 220.0, math.min(each, gap * 2.5));  // and quicker (a flight stays long enough to see)
-      gap = (_fadeAll - each) / (n - 1);
-    }
+    final pace = flyTo == null ? DrawCloseSpeed.fast : speed;
+    final (:each, :gap) = pace.timing(n, minEach: flyTo == null ? 60 : null);  // a plain fade may get quicker than a flight
+    final curve = pace.curve;
     final total = each + gap * (n - 1);
     final done = _fadeDone = Completer<bool>();
     final clock = Stopwatch()..start();
@@ -1611,7 +1606,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       if (!mounted || _fadeOut == null) { timer.cancel(); if (!done.isCompleted) done.complete(true); return; }
       setState(() => _fadeOut = {
             for (var i = 0; i < n; i++)
-              ids[i]: 1 - Curves.easeIn.transform(((ms - gap * i) / each).clamp(0.0, 1.0)),
+              ids[i]: 1 - curve.transform(((ms - gap * i) / each).clamp(0.0, 1.0)),
           });
       if (ms >= total) { timer.cancel(); if (!done.isCompleted) done.complete(true); }
     });
@@ -4154,5 +4149,52 @@ class _MiniMenu<T> extends StatelessWidget {
         ]),
       ),
     );
+  }
+}
+
+/// How fast draw mode's "One by one" close sends the marks into the menu bar icon (Settings › Draw mode › Speed; the native
+/// side reads the choice when the glass is lifted and passes its name with drawFadeOut, so a change counts at the next close).
+/// [fast] is the pace before there was a choice; [standard] ("Normal", the default) and the slower ones give each mark a
+/// longer flight, leave more time between marks and ease in and out, so the eye can follow each one until it settles into
+/// the icon. macos/Runner/Shell/Settings.swift (DrawCloseSpeed) mirrors the names and waits at least [cap] for the answer.
+enum DrawCloseSpeed {
+  fast(each: 350, gap: 110, cap: 1300, minEach: 220, spread: 2.5, curve: Curves.easeIn),
+  standard(each: 520, gap: 190, cap: 2200, minEach: 320, spread: 4, curve: Curves.easeInOutCubic),
+  relaxed(each: 700, gap: 270, cap: 3000, minEach: 420, spread: 4, curve: Curves.easeInOutCubic),
+  slow(each: 950, gap: 380, cap: 4200, minEach: 560, spread: 4, curve: Curves.easeInOutCubic);
+
+  const DrawCloseSpeed({required this.each, required this.gap, required this.cap, required this.minEach, required this.spread,
+      required this.curve});
+
+  /// ms one mark takes to go, with few marks.
+  final int each;
+  /// ms from one mark setting off to the next, with few marks.
+  final int gap;
+  /// ms the whole may take, however much is drawn.
+  final int cap;
+  /// ms a flight never goes under, however much is drawn.
+  final int minEach;
+  /// With many marks the gap shrinks first; a flight gets shorter only once the gap is under [each] / [spread].
+  final double spread;
+  /// How a mark moves along its way (the painter's progress = this curve of the time).
+  final Curve curve;
+
+  /// The name the native side sends ("normal" for [standard], as in Settings.swift).
+  String get id => this == standard ? 'normal' : name;
+
+  /// The choice named [id]; anything else (an older native side, nothing chosen) is the default, [standard].
+  static DrawCloseSpeed byId(String? id) => values.firstWhere((s) => s.id == id, orElse: () => standard);
+
+  /// Each mark's time and the time between two marks setting off, for [n] marks: [each] and [gap] while
+  /// each + gap × (n − 1) fits in [cap]; past that the gap shrinks to fill the cap exactly, and once it is under
+  /// each / [spread] the flights shorten too (never under [minEach], or the minimum given), so the whole is [cap].
+  ({double each, double gap}) timing(int n, {double? minEach}) {
+    var e = each.toDouble(), g = gap.toDouble();
+    if (n > 1 && e + g * (n - 1) > cap) {
+      g = (cap - e) / (n - 1);                                                  // more marks: closer together first
+      e = math.max(minEach ?? this.minEach.toDouble(), math.min(e, g * spread)); // then quicker
+      g = (cap - e) / (n - 1);
+    }
+    return (each: e, gap: g);
   }
 }

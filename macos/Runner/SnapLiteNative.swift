@@ -202,14 +202,7 @@ final class SnapLiteNative {
       UserDefaults.standard.set(args["value"] as? String, forKey: args["key"] as? String ?? "")
       result(nil)
     case "showColorPanel":
-      let rgb = args["color"] as? Int ?? 0xE8332A
-      let panel = NSColorPanel.shared
-      panel.setTarget(self)
-      panel.setAction(#selector(colorPanelChanged(_:)))
-      panel.isContinuous = true
-      panel.color = NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
-                            blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
-      panel.orderFront(nil)
+      showColorPanel(args["color"] as? Int ?? 0xE8332A)
       result(nil)
     case "getBool":
       let key = args["key"] as? String ?? ""
@@ -295,6 +288,18 @@ final class SnapLiteNative {
 }
 
 extension SnapLiteNative {
+  /// The system colour panel ("Any color" in the editor's colour bar), starting at [rgb]; each change is sent to Dart as
+  /// "colorPicked". In draw mode it has to sit above the glass to be usable (LiveDraw.presentOverGlass).
+  func showColorPanel(_ rgb: Int) {
+    let panel = NSColorPanel.shared
+    panel.setTarget(self)
+    panel.setAction(#selector(colorPanelChanged(_:)))
+    panel.isContinuous = true
+    panel.color = NSColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                          blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
+    if !LiveDraw.shared.presentOverGlass(panel) { panel.orderFront(nil) }
+  }
+
   @objc func colorPanelChanged(_ sender: NSColorPanel) {
     guard let c = sender.color.usingColorSpace(.sRGB) else { return }
     func byte(_ v: CGFloat) -> Int { Int(max(0, min(255, (v * 255).rounded()))) }

@@ -855,10 +855,13 @@ final class LiveDraw {
     }
 
     private var leaving = false
+    /// The last "One by one" close (test control status.json "lastDrawClose"): speed, flight or fade, whether the editor
+    /// answered before the wait ran out, and how long it took.
+    private(set) var lastClose: [String: Any]?
 
     /// Asks the editor a yes/no [method]: "drawHasMarks" (anything drawn on the glass? picks the fly animation) or
-    /// "drawFadeOut" (the marks go one by one, each flying into [argument], the menu bar icon as [x, y] from the window's top
-    /// left, or fading without it; answers when the last is gone, false at once with nothing drawn).
+    /// "drawFadeOut" (the marks go one by one; [argument] {"to": the menu bar icon as [x, y] from the window's top left, or
+    /// null to only fade, "speed": DrawCloseSpeed raw value}; answers when the last is gone, false at once with nothing drawn).
     /// False after [within] seconds without an answer, so the glass always lifts.
     @MainActor private func askEditor(_ method: String, _ argument: Any? = nil, within: TimeInterval) async -> Bool {
         guard let invoker = SnapLiteNative.shared else { return false }
@@ -902,6 +905,46 @@ final class LiveDraw {
     /// A double-tap that came while the previous session was still being saved: draw mode opens once that is done.
     private var openWhenDone = false
 
+    /// The colour panel's own level and Spaces behaviour while presentOverGlass has it above the glass (nil: it has not).
+    private var panelSaved: (panel: NSPanel, level: NSWindow.Level, spaces: NSWindow.CollectionBehavior)?
+
+    /// Shows [panel] (the system colour panel, opened by the colour bar's "Any color" bubble) where it can be used while
+    /// the glass is up. On its own it floats at .floating, far below the glass (main menu + 1): it showed through the clear
+    /// glass, but every click on it landed on the glass (a new stroke, or the selection let go). So: just above the glass,
+    /// on every Space (the glass may be over a full-screen app), on the glass's display, and key, so its first click counts.
+    /// The selection on the glass stays; each change reaches Dart as "colorPicked" and recolours it. Lifting the glass
+    /// closes the panel and gives it its own level back (dropPanel). False when the glass is not up: show it as usual.
+    @discardableResult
+    func presentOverGlass(_ panel: NSPanel) -> Bool {
+        guard active, let w = editorWindow else { return false }
+        if panelSaved == nil { panelSaved = (panel, panel.level, panel.collectionBehavior) }
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.level = NSWindow.Level(rawValue: w.level.rawValue + 1)
+        if let screen = w.screen, !screen.visibleFrame.intersects(panel.frame) {   // e.g. last used on another display
+            let v = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: v.maxX - panel.frame.width - 40, y: v.maxY - panel.frame.height - 40))
+        }
+        panel.makeKeyAndOrderFront(nil)
+        return true
+    }
+
+    /// The glass is going: a colour panel raised over it closes and gets its own level and Spaces behaviour back.
+    private func dropPanel() {
+        guard let saved = panelSaved else { return }
+        panelSaved = nil
+        saved.panel.orderOut(nil)
+        saved.panel.level = saved.level
+        saved.panel.collectionBehavior = saved.spaces
+    }
+
+    /// For the test control's status: the colour panel, if it has been opened, and where it is against the glass.
+    var colorPanelStatus: [String: Any] {
+        guard NSColorPanel.sharedColorPanelExists else { return ["exists": false] }
+        let p = NSColorPanel.shared
+        return ["exists": true, "visible": p.isVisible, "key": p.isKeyWindow, "level": p.level.rawValue,
+                "glassLevel": editorWindow.map { $0.level.rawValue } ?? NSNull(), "raisedOverGlass": panelSaved != nil]
+    }
+
     /// Lifting the glass. At once: the glass stops taking the mouse, the keyboard goes back to the app you were in, and the
     /// glass vanishes (Settings › Draw mode › Closing: "One by one" first sends each mark into the menu bar icon in turn, on the click-through glass;
     /// "Fly" lets it live on only as the click-through animation picture).
@@ -913,6 +956,7 @@ final class LiveDraw {
         active = false
         if let o = activeObserver { NotificationCenter.default.removeObserver(o); activeObserver = nil }
         sampling?.cancel(); lastRects = []
+        dropPanel()
         let screen = w.screen ?? drawScreen ?? NSScreen.main
         let close = DrawClose.current
         let animate = close == .fly
@@ -935,15 +979,21 @@ final class LiveDraw {
             if close == .fade {
                 // The tools go at once and the marks leave one by one, newest first, on the glass itself: each shrinks along
                 // an arc into the menu bar icon, as the whole drawing does with "All at once" (Reduce Motion: each only
-                // fades). At most ~1.3 s, however much is drawn; the glass goes when the last has, at once with nothing
-                // drawn. Only on screen: the save below still has every mark.
+                // fades, quickly). Paced by Settings › Draw mode › Speed: at most 1.3 s (Fast) to 4.2 s (Slow), however much is
+                // drawn; the glass goes when the last has, at once with nothing drawn. Only on screen: the save below still
+                // has every mark.
                 self.removeFrost()
                 var icon: [Double]?
                 if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                     let p = DrawCloseAnimation.iconPoint(in: w.frame) ?? CGPoint(x: w.frame.width - 80, y: w.frame.height - 12)
                     icon = [Double(p.x), Double(w.frame.height - p.y)]
                 }
-                let flown = await self.askEditor("drawFadeOut", icon, within: 2)
+                let speed = DrawCloseSpeed.current
+                let started = Date()
+                let flown = await self.askEditor("drawFadeOut", ["to": icon.map { $0 as Any } ?? NSNull(), "speed": speed.rawValue] as [String: Any],
+                                                 within: speed.wait)
+                self.lastClose = ["speed": speed.rawValue, "fly": icon != nil, "answered": flown,
+                                  "seconds": Date().timeIntervalSince(started), "wait": speed.wait]
                 w.alphaValue = 0
                 if flown, icon != nil { DrawCloseAnimation.pulseIcon() }
             } else if animate {

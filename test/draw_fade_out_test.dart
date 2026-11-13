@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,7 +8,7 @@ import 'package:snaplite_flutter/editor/canvas_painter.dart';
 import 'package:snaplite_flutter/editor/editor_page.dart';
 import 'package:snaplite_flutter/model/annotation.dart';
 
-/// Lifting draw mode: the tools go and the marks fade away one by one, newest first, within ~1.2 s however many there are;
+/// Lifting draw mode: the tools go and the marks fade away one by one, newest first, within the chosen speed's cap however many there are;
 /// the marks stay in the drawing (the capture saved next has them all) and show again afterwards. Nothing drawn: done at once.
 void main() {
   setUp(() {
@@ -172,6 +174,151 @@ void main() {
       expect((late.$2 - to).distance, lessThan((from - to).distance * 0.4), reason: 'most of the way to the icon');
       expect(late.$1.width, lessThan(home.$1.width * 0.4), reason: 'shrunk on the way (3% at the end)');
       expect(late.$1.overlaps(box.inflate(4)), isFalse, reason: 'nothing left where it was');
+    });
+  });
+
+  group('speed (Settings › Draw mode › Speed)', () {
+    // The pace before there was a choice (1.82.8), for Fast to reproduce
+    ({double each, double gap}) old(int n, {required bool fly}) {
+      var each = 350.0, gap = 110.0;
+      if (n > 1 && each + gap * (n - 1) > 1300) {
+        gap = (1300 - each) / (n - 1);
+        each = math.max(fly ? 220.0 : 60.0, math.min(each, gap * 2.5));
+        gap = (1300 - each) / (n - 1);
+      }
+      return (each: each, gap: gap);
+    }
+
+    test('Fast is the old pace, for any number of marks, flying or only fading', () {
+      const fast = DrawCloseSpeed.fast;
+      expect([fast.each, fast.gap, fast.cap, fast.minEach], [350, 110, 1300, 220]);
+      expect(fast.curve, Curves.easeIn);
+      for (var n = 1; n <= 80; n++) {
+        for (final fly in [true, false]) {
+          final now = fast.timing(n, minEach: fly ? null : 60), then = old(n, fly: fly);
+          expect(now.each, closeTo(then.each, 1e-9), reason: '$n marks, fly $fly');
+          expect(now.gap, closeTo(then.gap, 1e-9), reason: '$n marks, fly $fly');
+        }
+      }
+    });
+
+    test('the default is Normal: a longer flight and a longer gap than Fast, easing into the icon', () {
+      expect(DrawCloseSpeed.byId(null), DrawCloseSpeed.standard);
+      expect(DrawCloseSpeed.byId('normal'), DrawCloseSpeed.standard);
+      expect(DrawCloseSpeed.byId('nonsense'), DrawCloseSpeed.standard);
+      expect(DrawCloseSpeed.standard.id, 'normal');
+      for (final s in DrawCloseSpeed.values) {
+        expect(DrawCloseSpeed.byId(s.id), s);
+      }
+      const order = [DrawCloseSpeed.fast, DrawCloseSpeed.standard, DrawCloseSpeed.relaxed, DrawCloseSpeed.slow];
+      for (var i = 1; i < order.length; i++) {
+        final a = order[i - 1], b = order[i];
+        expect(b.each, greaterThan(a.each), reason: '${b.id} flies longer than ${a.id}');
+        expect(b.gap, greaterThan(a.gap), reason: '${b.id} leaves more time between marks than ${a.id}');
+        expect(b.cap, greaterThan(a.cap), reason: 'the cap grows with the speed setting');
+        expect(b.minEach, greaterThan(a.minEach));
+      }
+      expect([DrawCloseSpeed.standard.each, DrawCloseSpeed.standard.gap, DrawCloseSpeed.standard.cap], [520, 190, 2200]);
+      expect([DrawCloseSpeed.relaxed.each, DrawCloseSpeed.relaxed.gap, DrawCloseSpeed.relaxed.cap], [700, 270, 3000]);
+      expect([DrawCloseSpeed.slow.each, DrawCloseSpeed.slow.gap, DrawCloseSpeed.slow.cap], [950, 380, 4200]);
+      // Everything but Fast slows down into the icon: slower over the last 5% of the way than through the middle
+      for (final s in order.skip(1)) {
+        final c = s.curve;
+        final end = (c.transform(1) - c.transform(0.95)) / 0.05, middle = (c.transform(0.55) - c.transform(0.45)) / 0.1;
+        expect(end, lessThan(middle * 0.5), reason: '${s.id} decelerates into the icon');
+      }
+    });
+
+    test('few marks: every speed keeps its own flight and gap', () {
+      for (final s in DrawCloseSpeed.values) {
+        for (var n = 1; s.each + s.gap * (n - 1) <= s.cap; n++) {
+          final t = s.timing(n);
+          expect(t.each, s.each.toDouble(), reason: '${s.id}, $n marks');
+          expect(t.gap, s.gap.toDouble(), reason: '${s.id}, $n marks');
+        }
+      }
+    });
+
+    test('many marks: the whole stays within the cap, the gap shrinks before the flight does', () {
+      for (final s in DrawCloseSpeed.values) {
+        var lastEach = double.infinity, lastGap = double.infinity;
+        var gapOnlyShrank = false;
+        for (final n in [for (var i = 1; i <= 2000; i++) i, 5000]) {
+          final t = s.timing(n);
+          final total = t.each + t.gap * (n - 1);
+          expect(total, lessThanOrEqualTo(s.cap + 1e-6), reason: '${s.id}, $n marks: $total ms');
+          expect(t.each, greaterThanOrEqualTo(s.minEach.toDouble()), reason: '${s.id}, $n marks: a flight stays long enough to see');
+          expect(t.gap, greaterThanOrEqualTo(0));
+          expect(t.each, lessThanOrEqualTo(lastEach), reason: 'more marks never fly slower');
+          // (Fast keeps the old formula's quirk: when its flights start to shorten the gap is worked out again and comes
+          // out a little longer, up to ~115 ms; the total is still the cap.)
+          if (s != DrawCloseSpeed.fast) {
+            expect(t.gap, lessThanOrEqualTo(lastGap + 1e-9), reason: '${s.id}, $n marks: more marks never wait longer between');
+          }
+          // The flight only gets shorter once the gap is down to each / spread
+          if (t.each < s.each) expect(t.gap, lessThan(s.each / s.spread + 1e-9), reason: '${s.id}, $n marks');
+          if (t.gap < s.gap && t.each == s.each) gapOnlyShrank = true;
+          lastEach = t.each; lastGap = t.gap;
+        }
+        if (s != DrawCloseSpeed.fast) expect(gapOnlyShrank, isTrue, reason: '${s.id}: some counts only bring the marks closer together');
+      }
+      // Fast as before: about 1.3 s for 30 marks; Slow at most 4.2 s even for 5000
+      final slow = DrawCloseSpeed.slow.timing(5000);
+      expect(slow.each + slow.gap * 4999, closeTo(4200, 1e-6));
+    });
+
+    test('the native side waits longer than each cap, so the glass never goes before the last mark lands', () {
+      final swift = File('macos/Runner/Shell/Settings.swift').readAsStringSync();
+      final names = RegExp(r'enum DrawCloseSpeed: String, CaseIterable \{\s*case ([a-z, ]+)\n').firstMatch(swift)!.group(1)!;
+      expect(names.split(',').map((e) => e.trim()).toList(), [for (final s in DrawCloseSpeed.values) s.id],
+          reason: 'Settings.swift sends the names Dart knows');
+      final block = RegExp(r'var wait: TimeInterval \{(.*?)\n    \}', dotAll: true).firstMatch(swift)!.group(1)!;
+      final waits = {for (final m in RegExp(r'case \.(\w+): return ([\d.]+)').allMatches(block)) m.group(1)!: double.parse(m.group(2)!)};
+      expect(waits.keys.toSet(), {for (final s in DrawCloseSpeed.values) s.id});
+      for (final s in DrawCloseSpeed.values) {
+        expect(waits[s.id]! * 1000, greaterThanOrEqualTo(s.cap + 600), reason: '${s.id}: wait ${waits[s.id]} s vs cap ${s.cap} ms');
+      }
+      final longest = DrawCloseSpeed.values.map((s) => s.cap).reduce(math.max);
+      expect(waits.values.reduce(math.max) * 1000, greaterThan(longest + 600), reason: 'the slowest setting is covered');
+    });
+
+    Future<int> timeFlight(WidgetTester tester, int marks, {DrawCloseSpeed? speed, bool fly = true}) async {
+      final editor = await pump(tester);
+      await arrows(tester, marks);
+      final clock = Stopwatch()..start();
+      final done = (await tester.runAsync(() => speed == null
+          ? editor.fadeOutDraw(flyTo: fly ? const Offset(1500, 10) : null)
+          : editor.fadeOutDraw(flyTo: fly ? const Offset(1500, 10) : null, speed: speed)))!;
+      final ms = clock.elapsedMilliseconds;
+      expect(done, isTrue);
+      expect(editor.drawFade!.values.every((o) => o == 0), isTrue, reason: 'every mark is gone');
+      editor.clearDrawFade();
+      return ms;
+    }
+
+    testWidgets('default: 3 marks take Normal’s 520 ms + 2 × 190 ms', (tester) async {
+      final ms = await timeFlight(tester, 3);
+      expect(ms, inInclusiveRange(880, 1500));
+    });
+
+    testWidgets('Fast: 3 marks take 350 ms + 2 × 110 ms, as before', (tester) async {
+      final ms = await timeFlight(tester, 3, speed: DrawCloseSpeed.fast);
+      expect(ms, inInclusiveRange(550, 1000));
+    });
+
+    testWidgets('Slow: 3 marks take 950 ms + 2 × 380 ms', (tester) async {
+      final ms = await timeFlight(tester, 3, speed: DrawCloseSpeed.slow);
+      expect(ms, inInclusiveRange(1690, 2400));
+    });
+
+    testWidgets('Slow with 30 marks still ends at its 4.2 s cap', (tester) async {
+      final ms = await timeFlight(tester, 30, speed: DrawCloseSpeed.slow);
+      expect(ms, inInclusiveRange(4180, 4900));
+    });
+
+    testWidgets('Reduce Motion (no icon point): only fades, at the old Fast pace whatever the speed', (tester) async {
+      final ms = await timeFlight(tester, 3, speed: DrawCloseSpeed.slow, fly: false);
+      expect(ms, inInclusiveRange(550, 1000));
     });
   });
 }

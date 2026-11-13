@@ -969,10 +969,13 @@ private final class BorderView: NSView {
 ///   "transcript" with its state, progress and sidecar paths);
 ///   "open" ("path": an image opened in the editor, as from Recent Captures),
 ///   "draw" (draw mode on/off, as Start Draw Mode Now), "doubletap" (a double-tap of Option: always draw mode on/off),
+///   "colorPanel" (opens the colour panel as the colour bar's "Any color" bubble does; above the glass in draw mode),
 ///   "matrix" (the rain on/off), "icon" (a left click on the menu
 ///   bar icon), "region" ("x","y","w","h": a region capture of that area without the picker), "screen" (Capture Full
 ///   Screen), "scroll" ("x","y","w","h": a scrolling capture of that area), "status" (writes status.json next to the
 ///   command file: recording, draw mode, rain, panel, editor window, Dock or menu bar app, front app, newest capture).
+/// Any command may also carry "drawClose" (fade, fly, off) and "drawCloseSpeed" (fast, normal, relaxed, slow): set as in
+/// Settings › Draw mode before the action runs.
 /// Areas are in points from the bottom-left of the main display. "synthetic" feeds generated pictures instead of the
 /// screen (for a Mac whose display cannot be captured right now) and writes the movie next to the command file instead
 /// of into the Library. SNAPNOW_RECORDING_MARKER=<path> moves the recording marker, so recovery can be tried on a file
@@ -1013,6 +1016,10 @@ enum RecorderTestControl {
             handled[handled.count - 1]["ignored"] = "older than the current recording"
             return
         }
+        if let v = json["drawClose"] as? String, DrawClose(rawValue: v) != nil { UserDefaults.standard.set(v, forKey: Prefs.liveDrawClose) }
+        if let v = json["drawCloseSpeed"] as? String, DrawCloseSpeed(rawValue: v) != nil {
+            UserDefaults.standard.set(v, forKey: Prefs.liveDrawCloseSpeed)
+        }
         let n = { (key: String, fallback: Double) in json[key] as? Double ?? fallback }
         let area = CGRect(x: n("x", 100), y: n("y", 100), width: n("w", 640), height: n("h", 400))
         switch action {
@@ -1031,6 +1038,7 @@ enum RecorderTestControl {
             }
         case "open": if let p = json["path"] as? String { Shell.shared.openEditor(URL(fileURLWithPath: p)) }
         case "draw": LiveDraw.shared.toggle()
+        case "colorPanel": SnapLiteNative.shared?.showColorPanel(0xE8332A)
         case "doubletap": LiveDraw.shared.doubleTap()
         case "matrix": MatrixRain.shared.toggle()
         case "icon": Shell.shared.testIconClick()
@@ -1061,6 +1069,10 @@ enum RecorderTestControl {
         status["movie"] = r.moviePath ?? NSNull()
         status["overlayWindows"] = r.overlayWindowIDs.sorted().map { Int($0) }
         status["drawMode"] = LiveDraw.shared.active
+        status["drawClose"] = DrawClose.current.rawValue
+        status["drawCloseSpeed"] = DrawCloseSpeed.current.rawValue
+        status["colorPanel"] = LiveDraw.shared.colorPanelStatus
+        status["lastDrawClose"] = LiveDraw.shared.lastClose ?? NSNull()
         status["matrixRain"] = MatrixRain.shared.running
         let editor = NSApp.windows.first { $0 is MainFlutterWindow }
         status["editorVisible"] = editor?.isVisible ?? false

@@ -20,6 +20,34 @@ enum DrawClose: String, CaseIterable {
     }
 }
 
+/// How fast "One by one" sends the marks into the menu bar icon (Settings › Draw mode › Speed), read each time the glass is
+/// lifted and passed to the editor with drawFadeOut. The pace itself lives in Dart (DrawCloseSpeed in editor_page.dart, same
+/// names); Fast is the pace before there was a choice. With Reduce Motion the marks only fade, at the Fast pace.
+enum DrawCloseSpeed: String, CaseIterable {
+    case fast, normal, relaxed, slow
+    var title: String {
+        switch self {
+        case .fast: return "Fast (350 ms a mark, 110 ms apart, at most 1.3 s)"
+        case .normal: return "Normal (520 ms a mark, 190 ms apart, at most 2.2 s)"
+        case .relaxed: return "Relaxed (700 ms a mark, 270 ms apart, at most 3 s)"
+        case .slow: return "Slow (950 ms a mark, 380 ms apart, at most 4.2 s)"
+        }
+    }
+    /// Seconds LiveDraw.leave waits for the editor to say the last mark is gone: this choice's cap in Dart plus room for a
+    /// busy main thread (Fast: the 2 s of before). test/draw_fade_out_test.dart reads these lines and checks them.
+    var wait: TimeInterval {
+        switch self {
+        case .fast: return 2.0
+        case .normal: return 3.2
+        case .relaxed: return 4.0
+        case .slow: return 5.2
+        }
+    }
+    static var current: DrawCloseSpeed {
+        UserDefaults.standard.string(forKey: Prefs.liveDrawCloseSpeed).flatMap(DrawCloseSpeed.init(rawValue:)) ?? .normal
+    }
+}
+
 enum Prefs {
     static let openEditor = "openEditorAfterCapture"
     static let copyImage = "copyAfterCapture"
@@ -37,6 +65,8 @@ enum Prefs {
     static let liveDrawCloseAnimation = "liveDrawCloseAnimation"
     /// How the glass goes when draw mode is lifted (DrawClose raw value; Settings › Draw mode › Closing).
     static let liveDrawClose = "liveDrawClose"
+    /// How fast "One by one" goes (DrawCloseSpeed raw value; Settings › Draw mode › Speed). Unset = normal.
+    static let liveDrawCloseSpeed = "liveDrawCloseSpeed"
     /// The Matrix rain's shortcut (Settings › Shortcuts, default ⌃⌥⇧⌘M) is live. Default on. The menu item works either way.
     static let matrixRain = "matrixRain"
     static let glassChoices: [(label: String, value: Int)] = [("100% glass (clear)", 100), ("75% glass", 75), ("50% glass", 50),
@@ -102,6 +132,8 @@ final class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
 
     private let stack = NSStackView()
+    /// Settings › Draw mode › Speed: only meaningful (enabled) while Closing is "One by one".
+    private weak var closingSpeed: NSPopUpButton?
 
     private init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 600),
@@ -174,6 +206,15 @@ final class SettingsWindowController: NSWindowController {
         closing.target = self
         closing.action = #selector(drawCloseChosen(_:))
         stack.addArrangedSubview(row("Closing", closing))
+        let speed = NSPopUpButton(frame: .zero, pullsDown: false)
+        speed.addItems(withTitles: DrawCloseSpeed.allCases.map(\.title))
+        speed.selectItem(at: DrawCloseSpeed.allCases.firstIndex(of: DrawCloseSpeed.current) ?? 1)
+        speed.target = self
+        speed.action = #selector(drawCloseSpeedChosen(_:))
+        speed.isEnabled = DrawClose.current == .fade
+        closingSpeed = speed
+        stack.addArrangedSubview(row("Speed", speed))
+        stack.addArrangedSubview(note("Speed paces One by one; many marks come closer together. Reduce Motion: they just fade."))
         stack.addArrangedSubview(checkbox("Matrix rain (\(Shortcuts.get(.matrix)?.display ?? "no shortcut"); change it under Shortcuts)",
                                           on: Prefs.onByDefault(Prefs.matrixRain),
                                           action: #selector(prefToggled(_:)), key: Prefs.matrixRain))
@@ -446,7 +487,13 @@ final class SettingsWindowController: NSWindowController {
     // MARK: - Actions
 
     @objc private func drawCloseChosen(_ sender: NSPopUpButton) {
-        UserDefaults.standard.set(DrawClose.allCases[sender.indexOfSelectedItem].rawValue, forKey: Prefs.liveDrawClose)
+        let close = DrawClose.allCases[sender.indexOfSelectedItem]
+        UserDefaults.standard.set(close.rawValue, forKey: Prefs.liveDrawClose)
+        closingSpeed?.isEnabled = close == .fade
+    }
+
+    @objc private func drawCloseSpeedChosen(_ sender: NSPopUpButton) {
+        UserDefaults.standard.set(DrawCloseSpeed.allCases[sender.indexOfSelectedItem].rawValue, forKey: Prefs.liveDrawCloseSpeed)
     }
 
     @objc private func glassChosen(_ sender: NSPopUpButton) {

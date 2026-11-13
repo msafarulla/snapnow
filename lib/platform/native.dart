@@ -17,7 +17,9 @@ class Native {
   static bool Function()? onDrawHasMarks;
   /// Draw mode is being lifted: what is drawn goes one mark after another, each flying into [flyTo] (the menu bar icon, in
   /// the window's coordinates from the top left) or, without it, fading; true when done, false when nothing was drawn.
-  static Future<bool> Function(Offset? flyTo)? onDrawFadeOut;
+  /// Draw mode lifted with "One by one": [flyTo] the menu bar icon (window points, null with Reduce Motion), speed the
+  /// chosen pace's name (DrawCloseSpeed.id). Answers true when the last mark is gone.
+  static Future<bool> Function(Offset? flyTo, String? speed)? onDrawFadeOut;
   /// Draw mode: how bright the screen is behind the toolbar and the panel (0 black ... 1 white), about every 0.7 s.
   static void Function(List<double> luma)? onGlassLuma;
   static void Function()? onShowLibrary;
@@ -36,8 +38,12 @@ class Native {
         case 'closeDraw': return await onCloseDraw?.call(call.arguments as String?) ?? false;
         case 'drawHasMarks': return onDrawHasMarks?.call() ?? false;
         case 'drawFadeOut':
-          final to = call.arguments is List ? (call.arguments as List).map((e) => (e as num).toDouble()).toList() : null;
-          return await onDrawFadeOut?.call(to != null && to.length == 2 ? Offset(to[0], to[1]) : null) ?? false;
+          // {"to": [x, y] or null, "speed": name}; before 1.82.9 just [x, y] or null
+          final args = call.arguments;
+          final raw = args is Map ? args['to'] : args;
+          final to = raw is List ? raw.map((e) => (e as num).toDouble()).toList() : null;
+          final speed = args is Map ? args['speed'] as String? : null;
+          return await onDrawFadeOut?.call(to != null && to.length == 2 ? Offset(to[0], to[1]) : null, speed) ?? false;
         case 'glassLuma': onGlassLuma?.call((call.arguments as List).map((e) => (e as num).toDouble()).toList());
         case 'showLibrary': onShowLibrary?.call();
         case 'capturesChanged': onCapturesChanged?.call();

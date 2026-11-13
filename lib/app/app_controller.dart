@@ -64,7 +64,8 @@ class AppController with TrayListener, WindowListener {
     Native.onCursorKick = () => editorKey.currentState?.kickCursor();
     Native.onCloseDraw = closeDraw;
     Native.onDrawHasMarks = () => editorKey.currentState?.hasDrawMarks ?? false;
-    Native.onDrawFadeOut = (flyTo) async => await editorKey.currentState?.fadeOutDraw(flyTo: flyTo) ?? false;
+    Native.onDrawFadeOut = (flyTo, speed) async =>
+        await editorKey.currentState?.fadeOutDraw(flyTo: flyTo, speed: DrawCloseSpeed.byId(speed)) ?? false;
     Native.onShowLibrary = showLibrary;
     Native.onCapturesChanged = () => capturesVersion.value++;
     Native.onAppearanceChanged = (choice) => appearance.value = choice;
