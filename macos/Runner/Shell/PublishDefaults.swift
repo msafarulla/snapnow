@@ -76,6 +76,9 @@ final class PublishDefaults {
         .bool("capture.stampTime"),
         .bool("capture.roundCorners"),
         .bool("capture.openInCrop"),
+        // Capture line (CaptureLine)
+        .bool("captureLine.enabled"),
+        .bool("captureLine.showOnCapture"),
         // Recording and transcripts
         .bool("recordMicrophone"),
         .bool("recordSystemAudio"),
@@ -104,6 +107,7 @@ final class PublishDefaults {
     static let excluded: [String: String] = [
         // excluded-keys:begin
         "regionCapture.lastArea": "screen coordinates of the last capture area; displays differ from Mac to Mac",
+        "captureLine.hidden": "the file names taken off the capture line on this Mac (captures stay on the Mac that took them)",
         "schedule.running": "whether a scheduled capture is running on this Mac right now (run state; it resumes at launch)",
         "screenPermission.grantedBuild": "the build Screen Recording was granted to on this Mac (system permission state)",
         "liveDraw.promptedAccessibility": "the Accessibility prompt was shown on this Mac (first-run state)",

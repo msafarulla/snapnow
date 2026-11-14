@@ -49,7 +49,9 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let hotkeysItem = NSMenuItem(title: "Hotkeys", action: nil, keyEquivalent: "")
     private var hotkeyModeItems: [HotkeyMode: NSMenuItem] = [:]
     private let shortcutWarning = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private var busy = false   // a capture, countdown or region pick is in progress
+    private var busy = false {  // a capture, countdown or region pick is in progress
+        didSet { if busy { CaptureLine.shared.hide(now: true) } }   // the capture line is never in the picture or in the way
+    }
     private var recordItem: NSMenuItem!
 
     func start() {
@@ -103,6 +105,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         ScheduledCapture.shared.resumeIfRunning()
         setUpRecorder()
         PublishDefaults.shared.start()   // Settings › Defaults: defaults published from another Mac
+        CaptureLine.shared.start()       // the newest captures on a line under the menu bar, to drag into any app
     }
 
     // MARK: - Menus
@@ -135,6 +138,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         recent.submenu = recentMenu
         menu.addItem(recent)
         menu.addItem(item("Open Captures Folder", #selector(openFolder)))
+        menu.addItem(item("Show Capture Line", #selector(toggleCaptureLine)))
         menu.addItem(.separator())
         let after = NSMenuItem(title: "After Capture", action: nil, keyEquivalent: "")
         after.submenu = NSMenu()
@@ -825,6 +829,8 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         NSApp.activate()
         SnapLiteNative.shared?.invoke("openEditor", url.path)
     }
+
+    @objc private func toggleCaptureLine() { CaptureLine.shared.toggle() }
 
     @objc func showLibrary() {
         if !LiveDraw.shared.active { LiveDraw.shared.restoreWindow() }   // never open at the full-screen draw-mode size

@@ -285,6 +285,15 @@ while you have fewer, it's filled with copies of the newest. The clipboard is us
 and put back a minute later. Stickers are fitted into 512 × 512, as WhatsApp requires. Needs WhatsApp for
 Mac.
 
+## Capture line
+
+Rest the pointer in the middle of the menu bar and a strip slides down with your newest captures hanging on a line.
+Drag one straight into any app (a chat, a mail, a document, an upload field, Finder): a copy goes there and the capture
+stays where it is. Click a capture to copy it, double-click to open it in the editor, right-click for Show in Finder,
+Take Off the Line (the file stays in the Library) and Move to Trash. Move the pointer away and the strip goes back up; it
+also comes down for a moment after each capture. Both behaviours are switches in Settings › Capture line, and the menu
+has Show Capture Line. The strip is never part of a capture or a shared screen.
+
 ## Same settings on every Mac
 
 Settings › Defaults: pick a folder all your Macs can reach (iCloud Drive, a synced or network folder). SnapNow keeps

@@ -386,6 +386,15 @@ final class SettingsWindowController: NSWindowController {
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(note("Every setting, shortcuts included, with the folders and images they use. Not: screen places, permission prompts, this group."))
 
+        // Capture line: the newest captures on a line under the menu bar (CaptureLine)
+        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(heading("Capture line"))
+        stack.addArrangedSubview(checkbox("Show my newest captures on a line when the pointer rests in the middle of the menu bar",
+                                          on: CaptureLine.enabled, action: #selector(captureLineToggled(_:))))
+        stack.addArrangedSubview(checkbox("Bring the line down for a moment after each capture",
+                                          on: CaptureLine.showOnCapture, action: #selector(captureLineOnCaptureToggled(_:))))
+        stack.addArrangedSubview(note("Drag a capture from the line into any app. Click copies it, double-click opens it, right-click has more."))
+
         // Shortcuts
         stack.addArrangedSubview(separator())
         stack.addArrangedSubview(heading("Shortcuts"))
@@ -678,6 +687,14 @@ final class SettingsWindowController: NSWindowController {
     @objc private func publishDefaults() { PublishDefaults.shared.publish() }
 
     @objc private func applyDefaultsNow() { PublishDefaults.shared.check(force: true) }
+
+    @objc private func captureLineToggled(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: CaptureLine.enabledKey)
+    }
+
+    @objc private func captureLineOnCaptureToggled(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: CaptureLine.showOnCaptureKey)
+    }
 
     @objc private func defaultsAutoPublishToggled(_ sender: NSButton) {
         PublishDefaults.shared.autoPublish = sender.state == .on
