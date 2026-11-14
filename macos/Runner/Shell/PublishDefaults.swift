@@ -144,6 +144,7 @@ final class PublishDefaults {
     /// look at the folder is done, so a Mac that starts up never overwrites a newer publish with its older state.
     private var baseline: Data?
     private var publishWork: DispatchWorkItem?
+    private var pendingSince: Date?                     // the first setting written since the last look at "did anything change"
     private var quietUntil = Date.distantPast          // just applied: the app's own follow-up writes are not "my changes"
     private var pollTimer: Timer?
     private var polling = false
@@ -230,12 +231,20 @@ final class PublishDefaults {
 
     private func rebaseline() { baseline = DefaultsFile.canonical(currentValues()) }
 
+    /// A second after the last write, but never more than three after the first: something else writing settings all the
+    /// time (this class's own bookkeeping did, on a network folder) must not put the publish off for ever.
     private func settingsChanged() {
         guard folder != nil, autoPublish, baseline != nil else { return }
+        let now = Date()
+        if pendingSince == nil { pendingSince = now }
+        let fire = min(now.addingTimeInterval(1), pendingSince!.addingTimeInterval(3))
         publishWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.publishIfChanged() }
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingSince = nil
+            self?.publishIfChanged()
+        }
         publishWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0.05, fire.timeIntervalSince(now)), execute: work)
     }
 
     private func publishIfChanged() {
@@ -432,7 +441,7 @@ final class PublishDefaults {
     }
 
     private func apply(_ p: DefaultsFile.Publish) {
-        quietUntil = Date().addingTimeInterval(2)
+        quietUntil = Date().addingTimeInterval(1.5)       // the editor reads its settings again; a publish waits until it has
         let r = DefaultsFile.apply(p.values, to: defaults, entries: Self.published, folders: p.folders, assets: p.assets,
                                    sharedFolder: folder)
         var kept: [String] = []
@@ -457,14 +466,19 @@ final class PublishDefaults {
         lastToast = Date()
         // what this Mac holds now is what was published: not a change of its own. Again once the editor has settled.
         rebaseline()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.05) { [weak self] in self?.rebaseline() }
         postStatus()
     }
 
     // MARK: - Status line
 
+    /// Written only when it is another publish: every look at the folder comes through here, and a write each time would
+    /// keep announcing "settings changed" to the automatic publish.
     private func noteSeen(_ p: DefaultsFile.Publish) {
-        defaults.set(["at": p.publishedAt, "mac": p.mac, "own": p.installId == installId] as [String: Any], forKey: Self.lastPublishedKey)
+        let old = defaults.dictionary(forKey: Self.lastPublishedKey)
+        let own = p.installId == installId
+        if let at = old?["at"] as? Date, abs(at.timeIntervalSince(p.publishedAt)) < 0.5, old?["mac"] as? String == p.mac,
+           old?["own"] as? Bool == own { return }
+        defaults.set(["at": p.publishedAt, "mac": p.mac, "own": own] as [String: Any], forKey: Self.lastPublishedKey)
     }
 
     private func postStatus() {
