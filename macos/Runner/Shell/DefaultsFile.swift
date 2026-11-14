@@ -148,10 +148,21 @@ enum DefaultsFile {
             throw CocoaError(.fileNoSuchFile, userInfo: [NSFilePathErrorKey: folder.path])
         }
         let temp = folder.appendingPathComponent(".\(name).\(UUID().uuidString).tmp")
+        let target = folder.appendingPathComponent(name)
         do {
             try data.write(to: temp)
-            if rename(temp.path, folder.appendingPathComponent(name).path) != 0 {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            // A network share can refuse to replace the file while any Mac has it open for reading (seen on SMB: the
+            // change then never left this Mac). Readers hold it for milliseconds, so try again a few times; as the last
+            // resort write over it in place - a reader that catches it half written skips it and reads again.
+            var code: Int32 = 0
+            for attempt in 0..<8 {
+                if rename(temp.path, target.path) == 0 { code = 0; break }
+                code = errno
+                if attempt < 7 { usleep(150_000) }
+            }
+            if code != 0 {
+                try data.write(to: target)
+                try? fm.removeItem(at: temp)
             }
         } catch {
             try? fm.removeItem(at: temp)
@@ -226,6 +237,14 @@ enum DefaultsFile {
     }
 
     // MARK: Apply
+
+    /// The file's modification time (milliseconds) and size: "has it changed since I read it?" without opening it.
+    /// nil when the file or folder cannot be seen right now.
+    static func stamp(folder: URL, fileManager fm: FileManager = .default) -> String? {
+        guard let a = try? fm.attributesOfItem(atPath: folder.appendingPathComponent(name).path),
+              let at = a[.modificationDate] as? Date, let size = a[.size] as? Int else { return nil }
+        return "\(Int(at.timeIntervalSince1970 * 1000))-\(size)"
+    }
 
     static func read(folder: URL, fileManager fm: FileManager = .default) -> ReadResult {
         var isDir: ObjCBool = false

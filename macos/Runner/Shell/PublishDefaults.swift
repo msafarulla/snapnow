@@ -149,7 +149,9 @@ final class PublishDefaults {
     private var quietUntil = Date.distantPast          // just applied: the app's own follow-up writes are not "my changes"
     private var pollTimer: Timer?
     private var polling = false
-    private var lastStamp: String?                      // the file's modification time and size at the last poll
+    private var readStamp: String?                      // the file's modification time and size when it was read last
+    private var retryWork: DispatchWorkItem?
+    private var retries = 0
     private var lastToast = Date.distantPast
     private var napGuard: NSObjectProtocol?
 
@@ -281,16 +283,13 @@ final class PublishDefaults {
     private func poll() {
         guard let folder, autoApply, !polling else { return }
         polling = true
-        let path = folder.appendingPathComponent(DefaultsFile.name).path
         io.async {
-            let a = try? FileManager.default.attributesOfItem(atPath: path)
-            let stamp = a.map { "\(($0[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)-\($0[.size] as? Int ?? 0)" }
+            let stamp = DefaultsFile.stamp(folder: folder)
             DispatchQueue.main.async {
                 self.polling = false
-                guard stamp != self.lastStamp else { return }
-                let first = self.lastStamp == nil
-                self.lastStamp = stamp
-                if !first || self.stream == nil { self.scheduleCheck(after: 0.1) }
+                // only a file that is there and is not the one read last (a share that does not answer for a moment is not news)
+                guard let stamp, stamp != self.readStamp else { return }
+                self.scheduleCheck(after: 0.1)
             }
         }
     }
@@ -364,7 +363,17 @@ final class PublishDefaults {
                 if let failure {
                     self.problem = "Could not publish: \(failure)"
                     if !automatic { Toast.show("Could not publish the defaults", symbol: "exclamationmark.triangle.fill", detail: failure) }
+                    // the change must still leave this Mac: again shortly (2 s, 4 s ... up to a minute apart), not "at the next change"
+                    if automatic {
+                        self.retries += 1
+                        let work = DispatchWorkItem { [weak self] in self?.publishIfChanged() }
+                        self.retryWork?.cancel()
+                        self.retryWork = work
+                        DispatchQueue.main.asyncAfter(deadline: .now() + min(60, pow(2, Double(min(self.retries, 6)))), execute: work)
+                    }
                 } else {
+                    self.retries = 0
+                    self.retryWork?.cancel()
                     self.problem = nil
                     // sent: no longer "my change" (a setting changed again meanwhile still differs from this and goes next)
                     self.baseline = local
@@ -386,10 +395,22 @@ final class PublishDefaults {
         }
         if reading { readAgain = true; return }
         reading = true
+        let known = readStamp
         io.async {
+            // whatever asked for this look (a file event, the poll, coming to the front): a file that has not changed since
+            // it was read is not read again, so nothing can keep this Mac reading - and holding - the shared file
+            let stamp = DefaultsFile.stamp(folder: folder)
+            if !force, let stamp, stamp == known {
+                DispatchQueue.main.async {
+                    self.reading = false
+                    if self.readAgain { self.readAgain = false; self.scheduleCheck() }
+                }
+                return
+            }
             let result = DefaultsFile.read(folder: folder)
             DispatchQueue.main.async {
                 self.reading = false
+                self.readStamp = stamp
                 self.handle(result, force: force)
                 if self.readAgain { self.readAgain = false; self.scheduleCheck() }
             }
