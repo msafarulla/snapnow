@@ -295,7 +295,9 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
 
   /// Something is being drawn this moment: draw mode's glass is up, or a stroke, shape, drag or text edit is under way.
   /// Settings › Defaults waits until it is over before applying defaults from another Mac.
-  bool get drawingNow => widget.overlay || _textEdit != null || _dragId != null || _createStart != null || _penPoints != null ||
+  /// A stroke, drag or text edit is under way (Settings › Defaults waits for it to end). Draw mode merely being open is not
+  /// "drawing": a Mac left with the glass up would otherwise never take the other Macs' settings.
+  bool get drawingNow => _textEdit != null || _dragId != null || _createStart != null || _penPoints != null ||
       _canvasDrag != null || _imageMove != null;
 
   Future<void> _loadPrefs() async {

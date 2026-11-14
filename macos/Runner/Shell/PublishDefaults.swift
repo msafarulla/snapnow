@@ -396,11 +396,13 @@ final class PublishDefaults {
         postStatus()
     }
 
-    /// Never in the middle of drawing: draw mode's glass up (it closes → LiveDraw.ended → another look) or a stroke, drag or
-    /// text edit under way in the editor (asked again shortly).
+    /// Never in the middle of drawing: a stroke, drag or text edit under way in the editor or on the glass (asked again
+    /// shortly), or the glass being lifted.
     private func applyWhenNotDrawing(_ p: DefaultsFile.Publish, force: Bool) {
-        if LiveDraw.shared.busy {
-            problem = "Defaults from \(p.mac) wait until draw mode closes"
+        // only while the glass is being lifted and saved (LiveDraw.ended follows and looks again); draw mode merely being
+        // open does not hold the other Macs' settings back - a stroke under way does (the editor's answer below)
+        if LiveDraw.shared.closing {
+            problem = "Defaults from \(p.mac) wait until draw mode has closed"
             return
         }
         editorIsDrawing { [weak self] drawing in

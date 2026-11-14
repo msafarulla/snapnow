@@ -859,6 +859,8 @@ final class LiveDraw {
     private var leaving = false
     /// The glass is up, or still being lifted and saved: Settings › Defaults applies nothing meanwhile.
     var busy: Bool { active || leaving }
+    /// The glass is being lifted and its marks saved right now (a second or two).
+    var closing: Bool { leaving }
     /// The last "One by one" close (test control status.json "lastDrawClose"): speed, flight or fade, whether the editor
     /// answered before the wait ran out, and how long it took.
     private(set) var lastClose: [String: Any]?
