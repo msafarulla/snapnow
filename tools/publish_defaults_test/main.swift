@@ -267,6 +267,63 @@ do {
     check(DefaultsFile.apply(["hotkeys.mode": "sometimes"], to: c, entries: entries).rejected == ["hotkeys.mode"], "an unknown hotkey mode is rejected")
 }
 
+// 1.84.0: the folders and files path settings point to travel with the publish; the canonical form for "did anything change"
+do {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appendingPathComponent("snapnow-pd-assets-\(UUID().uuidString)")
+    let homeA = root.appendingPathComponent("homeA"), homeB = root.appendingPathComponent("homeB"), shared = root.appendingPathComponent("shared")
+    for u in [homeA, homeB, shared] { try? fm.createDirectory(at: u, withIntermediateDirectories: true) }
+    folders.append(root)
+    let entries: [DefaultsFile.Entry] = [.path("watermark.imagePath"), .path("schedule.folder"), .bool("pinOnTop")]
+    try? fm.createDirectory(at: homeA.appendingPathComponent("Library/App"), withIntermediateDirectories: true)
+    try? fm.createDirectory(at: homeA.appendingPathComponent("Pictures/Timed"), withIntermediateDirectories: true)
+    let image = Data("first image".utf8)
+    try? image.write(to: homeA.appendingPathComponent("Library/App/mark.PNG"))
+    let values: [String: Any] = ["watermark.imagePath": "~/Library/App/mark.PNG", "schedule.folder": "~/Pictures/Timed", "pinOnTop": true]
+    let extra = DefaultsFile.publishAssets(values, entries: entries, to: shared, home: homeA.path)
+    let name = extra.assets["watermark.imagePath"] ?? ""
+    check(extra.folders == ["schedule.folder"], "a path setting that is a folder is named in folders")
+    check(name == DefaultsFile.hashHex(image) + ".png" && DefaultsFile.safeAssetName(name), "a file is published under its content hash")
+    check(fm.contents(atPath: shared.appendingPathComponent("assets/\(name)").path) == image, "the file's copy is in the shared assets folder")
+
+    var p = DefaultsFile.Publish(publishedAt: Date(), publishId: "P1", mac: "A", installId: "A", appVersion: "t", values: values)
+    p.folders = extra.folders; p.assets = extra.assets
+    guard case .ok(let back) = DefaultsFile.decode(try! DefaultsFile.encode(p)) else { check(false, "a publish with assets decodes"); exit(1) }
+    check(back.folders == extra.folders && back.assets == extra.assets, "folders and assets survive the file")
+
+    let bName = "snapnow.pd.assets.\(UUID().uuidString)"; suites.append(bName)
+    let b = UserDefaults(suiteName: bName)!
+    let r = DefaultsFile.apply(back.values, to: b, entries: entries, home: homeB.path, folders: back.folders, assets: back.assets, sharedFolder: shared)
+    check(r.missing.isEmpty && Set(r.applied) == ["watermark.imagePath", "schedule.folder", "pinOnTop"], "a Mac without the folder and the file applies both")
+    check(fm.contents(atPath: homeB.appendingPathComponent("Library/App/mark.PNG").path) == image, "the file was copied into place on the receiving Mac")
+    var isDir: ObjCBool = false
+    check(fm.fileExists(atPath: homeB.appendingPathComponent("Pictures/Timed").path, isDirectory: &isDir) && isDir.boolValue, "the folder was created on the receiving Mac")
+
+    // the publisher swaps the image for another one at the same path: the receiver's old copy is replaced, the old asset removed
+    let image2 = Data("second image".utf8)
+    try? image2.write(to: homeA.appendingPathComponent("Library/App/mark.PNG"))
+    let extra2 = DefaultsFile.publishAssets(values, entries: entries, to: shared, home: homeA.path)
+    check(extra2.assets["watermark.imagePath"] != name && !fm.fileExists(atPath: shared.appendingPathComponent("assets/\(name)").path), "an asset nothing points to any more is removed when publishing")
+    DefaultsFile.apply(values, to: b, entries: entries, home: homeB.path, folders: extra2.folders, assets: extra2.assets, sharedFolder: shared)
+    check(fm.contents(atPath: homeB.appendingPathComponent("Library/App/mark.PNG").path) == image2, "a changed file replaces the receiver's old copy")
+
+    // a missing asset file, an unsafe asset name, an older app's file without assets: the key is skipped and named, nothing else
+    let cName = "snapnow.pd.assets.\(UUID().uuidString)"; suites.append(cName)
+    let c = UserDefaults(suiteName: cName)!
+    let homeC = root.appendingPathComponent("homeC"); try? fm.createDirectory(at: homeC, withIntermediateDirectories: true)
+    let gone = DefaultsFile.apply(values, to: c, entries: entries, home: homeC.path, folders: [], assets: ["watermark.imagePath": "0000.png"], sharedFolder: shared)
+    check(gone.missing.sorted() == ["schedule.folder", "watermark.imagePath"] && gone.applied == ["pinOnTop"], "a missing asset file is skipped and named")
+    let evil = DefaultsFile.apply(values, to: c, entries: entries, home: homeC.path, folders: [], assets: ["watermark.imagePath": "../../\(DefaultsFile.name)"], sharedFolder: shared)
+    check(evil.missing.contains("watermark.imagePath") && !fm.fileExists(atPath: homeC.appendingPathComponent("Library/App/mark.PNG").path), "an asset name that leaves the assets folder is never used")
+    check(!DefaultsFile.safeAssetName("a/b.png") && !DefaultsFile.safeAssetName(".hidden") && !DefaultsFile.safeAssetName(""), "unsafe asset names are refused")
+
+    // "did anything change": the same values in any order are the same bytes; one changed value is not
+    let v1: [String: Any] = ["a": 1, "b": ["x": true, "y": [1, 2]], "c": NSNull()]
+    let v2: [String: Any] = ["c": NSNull(), "b": ["y": [1, 2], "x": true], "a": 1]
+    check(DefaultsFile.canonical(v1) == DefaultsFile.canonical(v2), "the canonical form does not depend on key order")
+    check(DefaultsFile.canonical(v1) != DefaultsFile.canonical(["a": 2, "b": ["x": true, "y": [1, 2]], "c": NSNull()]), "a changed value changes the canonical form")
+}
+
 for name in suites { UserDefaults.standard.removePersistentDomain(forName: name) }
 for url in folders { try? FileManager.default.removeItem(at: url) }
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")

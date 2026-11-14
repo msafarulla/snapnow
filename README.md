@@ -287,16 +287,20 @@ Mac.
 
 ## Same settings on every Mac
 
-Settings › Defaults: pick a folder all your Macs can reach (iCloud Drive, a synced or network folder) and click
-**Publish my defaults**. SnapNow writes `snapnow-defaults.json` there with all your settings: tool styles and My Styles,
-draw mode, shortcuts and the hotkey mode, what happens after a capture, recording, appearance, toolbar and GIF options,
-watermark and capture presets. Every other Mac using the same folder, with **Apply published defaults from other Macs
-automatically** on, picks it up (when the file changes, at launch and when SnapNow comes to the front), applies it at
-once (shortcuts are registered again) and says "Defaults updated from" that Mac's name. Folders inside your home folder
-travel as `~/…` and apply only where that folder exists. Not published: the last capture area (screen coordinates),
-permission prompts, a scheduled capture's running state, the last-used Save As format and this group's own settings.
-Nothing is applied while you are drawing, and a folder that can't be reached or a damaged file is skipped and shown in
-the status line.
+Settings › Defaults: pick a folder all your Macs can reach (iCloud Drive, a synced or network folder). SnapNow keeps
+`snapnow-defaults.json` there with all your settings: tool styles and My Styles, draw mode, shortcuts and the hotkey
+mode, what happens after a capture, recording, appearance, toolbar and GIF options, Save As formats, watermark and
+capture presets. With **Publish my changes automatically** on (the default), a change you make on one Mac is written
+about a second later; **Publish my defaults** does it by hand. Every other Mac using the same folder, with **Apply
+published defaults from other Macs automatically** on, applies it within a few seconds, also while SnapNow sits in the
+background (it watches the file and, for network folders, looks at it every 2 seconds), registers shortcuts again and
+says "Defaults updated from" that Mac's name. What a Mac has just applied is never published back, and a Mac that
+starts up applies a newer publish before it sends anything. If two Macs change settings at the same moment, the later
+one wins as a whole. Folders inside your home folder travel as `~/…` and are created where they are missing; a file a
+setting points to (the watermark image) is copied through the folder's `assets` subfolder. Not published: the last
+capture area (screen coordinates), permission prompts, a scheduled capture's running state and this group's own
+settings. Nothing is applied while you are drawing, and a folder that can't be reached or a damaged file is skipped and
+shown in the status line.
 
 ## The Library
 

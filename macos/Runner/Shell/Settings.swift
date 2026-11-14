@@ -370,6 +370,10 @@ final class SettingsWindowController: NSWindowController {
         let buttons = NSStackView(views: [publishButton, applyButton])
         buttons.spacing = 8
         stack.addArrangedSubview(buttons)
+        let autoPublish = checkbox("Publish my changes automatically", on: sync.autoPublish,
+                                   action: #selector(defaultsAutoPublishToggled(_:)))
+        autoPublish.isEnabled = hasFolder
+        stack.addArrangedSubview(autoPublish)
         let autoApply = checkbox("Apply published defaults from other Macs automatically", on: sync.autoApply,
                                  action: #selector(defaultsAutoApplyToggled(_:)))
         autoApply.isEnabled = hasFolder
@@ -380,7 +384,7 @@ final class SettingsWindowController: NSWindowController {
         status.preferredMaxLayoutWidth = 472
         status.widthAnchor.constraint(equalToConstant: 472).isActive = true
         stack.addArrangedSubview(status)
-        stack.addArrangedSubview(note("Every setting, shortcuts included. Not: screen places, permission prompts, this group. Home folders as ~/…"))
+        stack.addArrangedSubview(note("Every setting, shortcuts included, with the folders and images they use. Not: screen places, permission prompts, this group."))
 
         // Shortcuts
         stack.addArrangedSubview(separator())
@@ -674,6 +678,10 @@ final class SettingsWindowController: NSWindowController {
     @objc private func publishDefaults() { PublishDefaults.shared.publish() }
 
     @objc private func applyDefaultsNow() { PublishDefaults.shared.check(force: true) }
+
+    @objc private func defaultsAutoPublishToggled(_ sender: NSButton) {
+        PublishDefaults.shared.autoPublish = sender.state == .on
+    }
 
     @objc private func defaultsAutoApplyToggled(_ sender: NSButton) {
         PublishDefaults.shared.autoApply = sender.state == .on

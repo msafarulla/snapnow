@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Settings › Defaults, the part with no AppKit in it (tools/publish_defaults_test compiles this file alone): the shared
@@ -13,6 +14,10 @@ import Foundation
 /// home>" and is expanded on the receiving Mac; one outside the home is not published. null = the key was never set on the
 /// publishing Mac (the receiver goes back to the built-in default); a key missing from "values" (an older app that did not
 /// know it, a path outside the home) leaves the receiver's own value alone.
+/// Since 1.84.0 two optional members make a path setting the same everywhere: "folders": ["<key>", ...] names the path
+/// settings that are folders (a receiver without that folder creates it), and "assets": {"<key>": "<sha256>.<ext>"} names
+/// the copy, in the shared folder's "assets" subfolder, of the file a path setting points to (a receiver without that file
+/// copies it into place). An older app ignores both and keeps skipping such a path.
 enum DefaultsFile {
     static let name = "snapnow-defaults.json"
     /// Bump only for a change an older app must not apply (it skips a newer format and says so).
@@ -68,7 +73,15 @@ enum DefaultsFile {
         var installId: String
         var appVersion: String
         var values: [String: Any]
+        /// Path settings that are folders: created on a Mac that does not have them.
+        var folders: [String] = []
+        /// Path settings that are files: key -> the file's name in the shared folder's assets subfolder.
+        var assets: [String: String] = [:]
     }
+
+    static let assetsFolder = "assets"
+    /// A file a setting points to travels only up to this size (a watermark image, not a video).
+    static let maxAssetBytes = 25 * 1024 * 1024
 
     enum ReadResult {
         case unreachable            // the folder is not there (a network volume that is not mounted, a deleted folder)
@@ -120,8 +133,10 @@ enum DefaultsFile {
     }
 
     static func encode(_ p: Publish) throws -> Data {
-        let doc: [String: Any] = ["format": p.format, "publishedAt": iso.string(from: p.publishedAt), "publishId": p.publishId,
+        var doc: [String: Any] = ["format": p.format, "publishedAt": iso.string(from: p.publishedAt), "publishId": p.publishId,
                                   "mac": p.mac, "installId": p.installId, "appVersion": p.appVersion, "values": p.values]
+        if !p.folders.isEmpty { doc["folders"] = p.folders.sorted() }
+        if !p.assets.isEmpty { doc["assets"] = p.assets }
         return try JSONSerialization.data(withJSONObject: doc, options: [.prettyPrinted, .sortedKeys])
     }
 
@@ -142,6 +157,50 @@ enum DefaultsFile {
             try? fm.removeItem(at: temp)
             throw error
         }
+    }
+
+    /// The published values in one fixed byte form, to tell "something changed" from "nothing did".
+    static func canonical(_ values: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])) ?? Data()
+    }
+
+    /// For the path settings in [values] ("~/..."): which are folders, and a copy of each file (up to maxAssetBytes) in
+    /// [folder]/assets under its content hash, written whole or not at all and only when missing. Copies no published
+    /// setting points to any more are removed (only here, when publishing; never when applying).
+    static func publishAssets(_ values: [String: Any], entries: [Entry], to folder: URL, home: String = NSHomeDirectory(),
+                              fileManager fm: FileManager = .default) -> (folders: [String], assets: [String: String]) {
+        var folders: [String] = [], assets: [String: String] = [:]
+        let dir = folder.appendingPathComponent(assetsFolder, isDirectory: true)
+        for e in entries where e.kind == .path {
+            guard let abs = (values[e.key] as? String).flatMap({ expandHome($0, home: home) }) else { continue }
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: abs, isDirectory: &isDir) else { continue }
+            if isDir.boolValue { folders.append(e.key); continue }
+            guard let size = (try? fm.attributesOfItem(atPath: abs))?[.size] as? Int, size <= maxAssetBytes,
+                  let data = fm.contents(atPath: abs) else { continue }
+            let ext = (abs as NSString).pathExtension.lowercased().filter { $0.isLetter || $0.isNumber }
+            let name = hashHex(data) + (ext.isEmpty ? "" : "." + ext)
+            let target = dir.appendingPathComponent(name)
+            if !fm.fileExists(atPath: target.path) {
+                try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                let temp = dir.appendingPathComponent(".\(name).\(UUID().uuidString).tmp")
+                guard (try? data.write(to: temp)) != nil else { continue }
+                if rename(temp.path, target.path) != 0 { try? fm.removeItem(at: temp); continue }
+            }
+            assets[e.key] = name
+        }
+        let wanted = Set(assets.values)
+        for old in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where !wanted.contains(old) && !old.hasPrefix(".") {
+            try? fm.removeItem(at: dir.appendingPathComponent(old))
+        }
+        return (folders.sorted(), assets)
+    }
+
+    static func hashHex(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+
+    /// An asset name as publishAssets makes it: one plain file name, nothing that could leave the assets folder.
+    static func safeAssetName(_ name: String) -> Bool {
+        !name.isEmpty && !name.hasPrefix(".") && !name.contains("/") && !name.contains("\\") && name.count <= 100
     }
 
     // MARK: Apply
@@ -173,7 +232,8 @@ enum DefaultsFile {
               let values = doc["values"] as? [String: Any] else { return .malformed }
         let mac = (doc["mac"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "another Mac"
         return .ok(Publish(format: format, publishedAt: at, publishId: id, mac: mac, installId: install,
-                           appVersion: doc["appVersion"] as? String ?? "", values: values))
+                           appVersion: doc["appVersion"] as? String ?? "", values: values,
+                           folders: doc["folders"] as? [String] ?? [], assets: doc["assets"] as? [String: String] ?? [:]))
     }
 
     /// Own publishes are never applied (no ping-pong); an id already applied only again when asked (Apply now).
@@ -193,10 +253,13 @@ enum DefaultsFile {
 
     /// Sets the keys of [entries] found in [values]; null removes the key (back to the built-in default). Keys not in
     /// [entries] (excluded here, unknown to this version) are ignored; a bad value is skipped and the key keeps its value
-    /// here; a "~/..." path is expanded in [home] and set only if it exists.
+    /// here; a "~/..." path is expanded in [home] and set only if it exists - after creating it when the publish says it is
+    /// a folder ([folders]), or copying the published file into place when the publish carries it ([assets], kept in
+    /// [sharedFolder]/assets).
     @discardableResult
     static func apply(_ values: [String: Any], to d: UserDefaults, entries: [Entry], home: String = NSHomeDirectory(),
-                      fileManager fm: FileManager = .default) -> Applied {
+                      fileManager fm: FileManager = .default, folders: [String] = [], assets: [String: String] = [:],
+                      sharedFolder: URL? = nil) -> Applied {
         var r = Applied()
         for e in entries {
             guard let v = values[e.key] else { continue }
@@ -205,6 +268,19 @@ enum DefaultsFile {
                 r.applied.append(e.key)
             } else if e.kind == .path {
                 guard let abs = (v as? String).flatMap({ expandHome($0, home: home) }), e.accepts(abs) else { r.rejected.append(e.key); continue }
+                if folders.contains(e.key) {
+                    if !fm.fileExists(atPath: abs) { try? fm.createDirectory(atPath: abs, withIntermediateDirectories: true) }
+                } else if let name = assets[e.key], safeAssetName(name), let sharedFolder {
+                    // the published file: copied into place when missing here, or when this Mac's file there is another one
+                    let source = sharedFolder.appendingPathComponent(assetsFolder).appendingPathComponent(name)
+                    var isDir: ObjCBool = false
+                    let here = fm.fileExists(atPath: abs, isDirectory: &isDir)
+                    let same = here && !isDir.boolValue && fm.contents(atPath: abs).map { name.hasPrefix(hashHex($0)) } == true
+                    if !same, !isDir.boolValue, let data = fm.contents(atPath: source.path), name.hasPrefix(hashHex(data)) {
+                        try? fm.createDirectory(atPath: (abs as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                        try? data.write(to: URL(fileURLWithPath: abs), options: .atomic)
+                    }
+                }
                 if fm.fileExists(atPath: abs) {
                     d.set(abs, forKey: e.key)
                     r.applied.append(e.key)

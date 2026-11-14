@@ -4,7 +4,10 @@ import SystemConfiguration
 /// Settings › Defaults: the same settings on every Mac. "Publish my defaults" writes every user setting (the `settings`
 /// below minus the `excluded` ones) to snapnow-defaults.json in a folder the user's Macs share (iCloud Drive, a synced or
 /// network folder); every other Mac with the switch on applies a publish it has not applied yet, never its own (format and
-/// rules: DefaultsFile). Publishing is only ever by hand, so applying never publishes anything back.
+/// rules: DefaultsFile). With "Publish my changes automatically" on (the default) a change to any published setting on
+/// this Mac is published a moment later, and a publish from another Mac is applied within a few seconds (file events, plus
+/// a 2 s look at the file for network folders), so every Mac ends up with the same SnapNow. What was just applied is never
+/// published back: publishing compares against the values as they stood after the last publish or apply.
 final class PublishDefaults {
     static let shared = PublishDefaults()
     /// Defaults from another Mac were applied (Settings rebuilds to show them).
@@ -62,6 +65,7 @@ final class PublishDefaults {
         .choice("gifFps", Prefs.gifFpsChoices),
         .intText("manimRenderH"),
         .text("saveAs.defaultFormat") { name in name.isEmpty || SaveAs.available.contains { $0.name == name } },
+        .text("saveAs.format"),                                // the format used last in Save As (an unknown name falls back there)
         // Capture: the panel's settings and presets, what happens after a capture, stamp, corners, crop
         .json("captureConfig", CaptureConfig.decodes),
         .json("capturePresets", CaptureConfig.decodesPresets),
@@ -99,13 +103,13 @@ final class PublishDefaults {
     static let excluded: [String: String] = [
         // excluded-keys:begin
         "regionCapture.lastArea": "screen coordinates of the last capture area; displays differ from Mac to Mac",
-        "saveAs.format": "the format last used in Save As (history; the chosen default saveAs.defaultFormat is published)",
         "schedule.running": "whether a scheduled capture is running on this Mac right now (run state; it resumes at launch)",
         "screenPermission.grantedBuild": "the build Screen Recording was granted to on this Mac (system permission state)",
         "liveDraw.promptedAccessibility": "the Accessibility prompt was shown on this Mac (first-run state)",
         "liveDraw.promptedInputMonitoring": "the Input Monitoring prompt was shown on this Mac (first-run state)",
         "sharedDefaults.folder": "this feature's shared folder: each Mac picks its own way to reach it",
         "sharedDefaults.autoApply": "this feature's switch: each Mac decides whether it follows the others",
+        "sharedDefaults.autoPublish": "this feature's switch: each Mac decides whether its changes go out by themselves",
         "sharedDefaults.installId": "identifies this app install so that its own publish is never applied here",
         "sharedDefaults.lastAppliedId": "bookkeeping: the publish applied last on this Mac",
         "sharedDefaults.lastApplied": "bookkeeping: when and from which Mac defaults were applied here",
@@ -120,6 +124,7 @@ final class PublishDefaults {
 
     private static let folderKey = "sharedDefaults.folder"
     private static let autoApplyKey = "sharedDefaults.autoApply"
+    private static let autoPublishKey = "sharedDefaults.autoPublish"
     private static let installIdKey = "sharedDefaults.installId"           // random, made once per install
     private static let lastAppliedIdKey = "sharedDefaults.lastAppliedId"
     private static let lastAppliedKey = "sharedDefaults.lastApplied"       // ["at": Date, "mac": String]
@@ -135,6 +140,16 @@ final class PublishDefaults {
     private var readAgain = false
     /// Why the last look at the folder applied nothing (or not everything), for the status line; nil when all is well.
     private(set) var problem: String?
+    /// The published values as they stood after the last publish or apply (DefaultsFile.canonical); nil until the first
+    /// look at the folder is done, so a Mac that starts up never overwrites a newer publish with its older state.
+    private var baseline: Data?
+    private var publishWork: DispatchWorkItem?
+    private var quietUntil = Date.distantPast          // just applied: the app's own follow-up writes are not "my changes"
+    private var pollTimer: Timer?
+    private var polling = false
+    private var lastStamp: String?                      // the file's modification time and size at the last poll
+    private var lastToast = Date.distantPast
+    private var napGuard: NSObjectProtocol?
 
     /// Empty = the feature is off.
     var folder: URL? {
@@ -142,9 +157,20 @@ final class PublishDefaults {
         set {
             if let newValue { defaults.set(newValue.path, forKey: Self.folderKey) } else { defaults.removeObject(forKey: Self.folderKey) }
             problem = nil
+            baseline = nil
             watch()
             postStatus()
             scheduleCheck(after: 0.2)
+        }
+    }
+
+    /// On by default: a change to a published setting on this Mac is published by itself.
+    var autoPublish: Bool {
+        get { Prefs.onByDefault(Self.autoPublishKey) }
+        set {
+            defaults.set(newValue, forKey: Self.autoPublishKey)
+            if newValue { rebaseline() }               // only changes made from now on go out
+            postStatus()
         }
     }
 
@@ -154,6 +180,7 @@ final class PublishDefaults {
         set {
             defaults.set(newValue, forKey: Self.autoApplyKey)
             postStatus()
+            startPolling()
             if newValue { scheduleCheck(after: 0.2) }
         }
     }
@@ -187,9 +214,73 @@ final class PublishDefaults {
         NotificationCenter.default.addObserver(forName: LiveDraw.ended, object: nil, queue: .main) { [weak self] _ in
             self?.scheduleCheck()
         }
+        // any write to a setting, from Swift or the editor: published a moment after the last one (a slider drag = one publish)
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: defaults, queue: .main) { [weak self] _ in
+            self?.settingsChanged()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             self?.watch()
             self?.scheduleCheck(after: 0)
+        }
+    }
+
+    // MARK: - Automatic publish
+
+    private func currentValues() -> [String: Any] { DefaultsFile.snapshot(defaults, entries: Self.published) }
+
+    private func rebaseline() { baseline = DefaultsFile.canonical(currentValues()) }
+
+    private func settingsChanged() {
+        guard folder != nil, autoPublish, baseline != nil else { return }
+        publishWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.publishIfChanged() }
+        publishWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    private func publishIfChanged() {
+        guard folder != nil, autoPublish, let baseline else { return }
+        if Date() < quietUntil {                         // settling after an apply: look again when it is over
+            let wait = quietUntil.timeIntervalSinceNow + 0.1
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in self?.settingsChanged() }
+            return
+        }
+        guard DefaultsFile.canonical(currentValues()) != baseline else { return }
+        publish(automatic: true)
+    }
+
+    // MARK: - Poll (network folders report no file events for other Macs' writes)
+
+    /// Every 2 s, while a folder is set and applying is on: the file's modification time and size, read off the main
+    /// thread (a volume that stops answering holds up only that read; the next ones are skipped until it returns).
+    private func startPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+        if let napGuard { ProcessInfo.processInfo.endActivity(napGuard); self.napGuard = nil }
+        guard folder != nil, autoApply else { return }
+        // a menu bar app in the background is napped by macOS and its timers stretched to many seconds: keep this one on time
+        napGuard = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                         reason: "Applying published defaults from other Macs promptly")
+        let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
+        t.tolerance = 0.3
+        RunLoop.main.add(t, forMode: .common)
+        pollTimer = t
+    }
+
+    private func poll() {
+        guard let folder, autoApply, !polling else { return }
+        polling = true
+        let path = folder.appendingPathComponent(DefaultsFile.name).path
+        io.async {
+            let a = try? FileManager.default.attributesOfItem(atPath: path)
+            let stamp = a.map { "\(($0[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)-\($0[.size] as? Int ?? 0)" }
+            DispatchQueue.main.async {
+                self.polling = false
+                guard stamp != self.lastStamp else { return }
+                let first = self.lastStamp == nil
+                self.lastStamp = stamp
+                if !first || self.stream == nil { self.scheduleCheck(after: 0.1) }
+            }
         }
     }
 
@@ -197,6 +288,7 @@ final class PublishDefaults {
     /// A network volume does not report other Macs' writes: those are picked up at launch and when SnapNow becomes active.
     private func watch() {
         stopWatching()
+        startPolling()
         guard let path = folder?.path else { return }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
@@ -206,7 +298,7 @@ final class PublishDefaults {
         }
         let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot)
         guard let s = FSEventStreamCreate(nil, callback, &context, [path] as CFArray,
-                                          FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5, flags) else { return }
+                                          FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.2, flags) else { return }
         FSEventStreamSetDispatchQueue(s, .main)
         FSEventStreamStart(s)
         stream = s
@@ -223,7 +315,7 @@ final class PublishDefaults {
     }
 
     /// Bursts of events (the temp file, the rename, a sync client's own steps) end in one look.
-    private func scheduleCheck(after delay: TimeInterval = 0.7) {
+    private func scheduleCheck(after delay: TimeInterval = 0.3) {
         checkWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.check() }
         checkWork = work
@@ -232,21 +324,28 @@ final class PublishDefaults {
 
     // MARK: - Publish
 
-    /// "Publish my defaults": the settings, written whole into the folder.
-    func publish() {
+    /// "Publish my defaults" (and every automatic publish): the settings, written whole into the folder, with the folders
+    /// and files the path settings point to (DefaultsFile.publishAssets). [automatic] failures only show in the status line.
+    func publish(automatic: Bool = false) {
         guard let folder else { return }
-        let p = DefaultsFile.Publish(publishedAt: Date(), publishId: UUID().uuidString, mac: Self.macName, installId: installId,
-                                     appVersion: Self.appVersion, values: DefaultsFile.snapshot(defaults, entries: Self.published))
-        guard let data = try? DefaultsFile.encode(p) else { return }
+        publishWork?.cancel()
+        let values = currentValues()
+        let snapshot = DefaultsFile.canonical(values)
+        var p = DefaultsFile.Publish(publishedAt: Date(), publishId: UUID().uuidString, mac: Self.macName, installId: installId,
+                                     appVersion: Self.appVersion, values: values)
         io.async {
             var failure: String?
-            do { try DefaultsFile.write(data, to: folder) } catch { failure = error.localizedDescription }
+            let extra = DefaultsFile.publishAssets(values, entries: Self.published, to: folder)
+            p.folders = extra.folders
+            p.assets = extra.assets
+            do { try DefaultsFile.write(try DefaultsFile.encode(p), to: folder) } catch { failure = error.localizedDescription }
             DispatchQueue.main.async {
                 if let failure {
                     self.problem = "Could not publish: \(failure)"
-                    Toast.show("Could not publish the defaults", symbol: "exclamationmark.triangle.fill", detail: failure)
+                    if !automatic { Toast.show("Could not publish the defaults", symbol: "exclamationmark.triangle.fill", detail: failure) }
                 } else {
                     self.problem = nil
+                    self.baseline = snapshot             // what the other Macs have now; a failed publish is tried again on the next change
                     self.noteSeen(p)
                 }
                 self.postStatus()
@@ -259,7 +358,10 @@ final class PublishDefaults {
     /// Looks at the folder and applies a publish from another Mac that was not applied yet. [force] = "Apply now": works with
     /// the switch off and applies the file again even if it was applied before (never this Mac's own publish).
     func check(force: Bool = false) {
-        guard let folder, force || autoApply else { return }
+        guard let folder, force || autoApply else {
+            if folder != nil, baseline == nil { rebaseline() }   // not following the others: this Mac's changes still go out
+            return
+        }
         if reading { readAgain = true; return }
         reading = true
         io.async {
@@ -288,6 +390,9 @@ final class PublishDefaults {
             case .apply: applyWhenNotDrawing(p, force: force)
             }
         }
+        // the first look is done (a newer publish, if any, is applied or waiting for drawing to end): from here on this Mac's
+        // own changes are published
+        if baseline == nil { rebaseline() }
         postStatus()
     }
 
@@ -325,7 +430,9 @@ final class PublishDefaults {
     }
 
     private func apply(_ p: DefaultsFile.Publish) {
-        let r = DefaultsFile.apply(p.values, to: defaults, entries: Self.published)
+        quietUntil = Date().addingTimeInterval(2)
+        let r = DefaultsFile.apply(p.values, to: defaults, entries: Self.published, folders: p.folders, assets: p.assets,
+                                   sharedFolder: folder)
         var kept: [String] = []
         if !r.missing.isEmpty { kept.append("Skipped \(r.missing.joined(separator: ", ")): that folder or file is not on this Mac") }
         if !r.rejected.isEmpty { kept.append("Kept this Mac's own \(r.rejected.joined(separator: ", ")): not valid here") }
@@ -341,7 +448,14 @@ final class PublishDefaults {
         if touched.contains("toolbarTools") { NotificationCenter.default.post(name: ToolbarPrefs.changed, object: nil) }
         NotificationCenter.default.post(name: Self.changed, object: nil)
         SnapLiteNative.shared?.invoke("defaultsChanged", r.applied)   // the editor reads its settings again
-        Toast.show("Defaults updated from \(p.mac)", symbol: "arrow.triangle.2.circlepath")
+        // one toast for a run of publishes (someone adjusting settings on the other Mac), not one per change
+        if Date().timeIntervalSince(lastToast) > 20 {
+            Toast.show("Defaults updated from \(p.mac)", symbol: "arrow.triangle.2.circlepath")
+        }
+        lastToast = Date()
+        // what this Mac holds now is what was published: not a change of its own. Again once the editor has settled.
+        rebaseline()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.05) { [weak self] in self?.rebaseline() }
         postStatus()
     }
 
@@ -363,6 +477,7 @@ final class PublishDefaults {
         f.timeStyle = .short
         f.doesRelativeDateFormatting = true
         var line: String
+        let mode = autoPublish ? "Automatic. " : ""
         if let seen = defaults.dictionary(forKey: Self.lastPublishedKey), let at = seen["at"] as? Date {
             let own = (seen["own"] as? Bool) == true ? " (this Mac)" : ""
             line = "Last published \(f.string(from: at)) from \(seen["mac"] as? String ?? "a Mac")\(own)"
@@ -376,6 +491,6 @@ final class PublishDefaults {
             line += "; nothing applied here yet."
         }
         if let problem { line += " \(problem)." }
-        return line
+        return mode + line
     }
 }
