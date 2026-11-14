@@ -37,7 +37,8 @@ class BuildUpGif {
   /// sharpness, capped at a 4K side). The GIF never upscales past the capture's own pixels — see
   /// [outputScale].
   static const minMaxSide = 256, maxMaxSide = 6000;
-  static int maxSide = 3840;
+  static const defaultMaxSide = 3840;
+  static int maxSide = defaultMaxSide;
 
   /// Clamp and set the chosen longest-side size (rejects out-of-range custom values).
   static void setMaxSide(int px) => maxSide = px.clamp(minMaxSide, maxMaxSide);

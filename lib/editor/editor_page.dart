@@ -243,29 +243,60 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     _makeBlankCanvas(1200, 800);
     _loadPrefs();
     if (widget.overlay) _drawRestore(); // built straight into draw mode (normally it arrives there in didUpdateWidget)
-    Native.getBool('followDrag').then((on) { if (mounted && on != null) setState(() => _followDrag = on); });
-    Native.getString('gifEntrance').then((v) async {
-      var e = Entrance.values.where((e) => e.name == v).firstOrNull;
-      e ??= (await Native.getBool('gifFourier')) == true ? Entrance.fourier : null; // the older on/off setting
-      if (e == Entrance.envelope) e = Entrance.draw; // String art was removed from the choices; a saved choice falls back to Draw
-      if (mounted && e != null) setState(() => BuildUpGif.entrance = e!);
-    });
-    Native.getString('gifMaxSide').then((v) { final n = int.tryParse(v ?? ''); if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n)); });
+    _loadToolDefaults();
     Native.getBool('pinOnTop').then((on) { if (on == true && !_pinTouched) _setPinned(true, save: false); });
     Native.getBool('draw.inspector').then((on) { if (mounted && on == true) setState(() => _drawInspector = true); });
     Native.getBool('inspector.hidden').then((hidden) { if (mounted && hidden == true) setState(() => _inspectorShown = false); });
     Native.getBool('toolbar.left').then((left) { if (mounted && left != null) setState(() => toolbarLeft.value = left); });
-    Native.getString('callout.style').then((v) {
-      final s = CalloutStyle.values.where((s) => s.name == v).firstOrNull;
-      if (mounted && s != null) setState(() => _calloutStyle = s);
-    });
-    Native.getString('step.style').then((v) {
-      final s = StepMarker.values.where((s) => s.name == v).firstOrNull;
-      if (mounted && s != null) setState(() => _stepMarker = s);
-    });
     _textController.addListener(_textChanged);
     Native.onColorPicked = (rgb) => pickColor(Color(0xFF000000 | rgb), refresh: false);
   }
+
+  /// The tool choices kept in the prefs: curves follow the drag, GIF entrance and size, bubble and step shapes. [reset]:
+  /// Settings › Defaults applied another Mac's defaults, where a key never set there arrives removed, so a missing key goes
+  /// back to its built-in default (at startup those are in place already).
+  void _loadToolDefaults({bool reset = false}) {
+    Native.getBool('followDrag').then((on) { if (mounted && (on != null || reset)) setState(() => _followDrag = on ?? true); });
+    Native.getString('gifEntrance').then((v) async {
+      var e = Entrance.values.where((e) => e.name == v).firstOrNull;
+      e ??= (await Native.getBool('gifFourier')) == true ? Entrance.fourier : null; // the older on/off setting
+      if (e == Entrance.envelope) e = Entrance.draw; // String art was removed from the choices; a saved choice falls back to Draw
+      if (reset) e ??= Entrance.draw;
+      if (mounted && e != null) setState(() => BuildUpGif.entrance = e!);
+    });
+    Native.getString('gifMaxSide').then((v) {
+      final n = int.tryParse(v ?? '') ?? (reset ? BuildUpGif.defaultMaxSide : null);
+      if (mounted && n != null) setState(() => BuildUpGif.setMaxSide(n));
+    });
+    Native.getString('callout.style').then((v) {
+      final s = CalloutStyle.values.where((s) => s.name == v).firstOrNull ?? (reset ? CalloutStyle.rounded : null);
+      if (mounted && s != null) setState(() => _calloutStyle = s);
+    });
+    Native.getString('step.style').then((v) {
+      final s = StepMarker.values.where((s) => s.name == v).firstOrNull ?? (reset ? StepMarker.circle : null);
+      if (mounted && s != null) setState(() => _stepMarker = s);
+    });
+  }
+
+  /// Settings › Defaults applied settings published from another Mac: every setting this editor keeps is read again, so
+  /// the new arrow, line, shape and text styles, My Styles, tool choices, toolbar side, inspector and pin take effect at
+  /// once. Draw mode reads its own colour, tool, strip and glass each time it opens, and the native side never applies in
+  /// the middle of drawing. A key that is gone means the built-in default.
+  Future<void> reloadDefaults() async {
+    _loadToolDefaults(reset: true);
+    Native.getBool('toolbar.left').then((left) { if (mounted) setState(() => toolbarLeft.value = left ?? false); });
+    Native.getBool('inspector.hidden').then((hidden) { if (mounted) setState(() => _inspectorShown = hidden != true); });
+    Native.getBool('draw.inspector').then((on) { if (mounted) setState(() => _drawInspector = on == true); });
+    Native.getBool('pinOnTop').then((on) { if (mounted) _setPinned(on == true, save: false); });
+    _styleDefaults.clear();
+    _textFormats.clear();
+    await _loadPrefs();
+  }
+
+  /// Something is being drawn this moment: draw mode's glass is up, or a stroke, shape, drag or text edit is under way.
+  /// Settings › Defaults waits until it is over before applying defaults from another Mac.
+  bool get drawingNow => widget.overlay || _textEdit != null || _dragId != null || _createStart != null || _penPoints != null ||
+      _canvasDrag != null || _imageMove != null;
 
   Future<void> _loadPrefs() async {
     for (final k in StyleKind.values) {

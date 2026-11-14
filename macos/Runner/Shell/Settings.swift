@@ -147,6 +147,9 @@ final class SettingsWindowController: NSWindowController {
         stack.edgeInsets = NSEdgeInsets(top: 20, left: 24, bottom: 24, right: 24)
         NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Theme.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(rebuild), name: Shortcuts.changed, object: nil)   // on/off + "in use" status
+        // Settings › Defaults: values applied from another Mac, and the group's status line
+        NotificationCenter.default.addObserver(self, selector: #selector(rebuildIfShown), name: PublishDefaults.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(rebuildIfShown), name: PublishDefaults.statusChanged, object: nil)
         rebuild()
     }
 
@@ -338,6 +341,46 @@ final class SettingsWindowController: NSWindowController {
         opacity.widthAnchor.constraint(equalToConstant: 180).isActive = true
         stack.addArrangedSubview(row("Opacity", opacity))
         stack.addArrangedSubview(note("Your text and/or image are stamped on every capture at the chosen spot and opacity."))
+
+        // Defaults: the same drawing and capture defaults on every Mac (PublishDefaults)
+        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(heading("Defaults"))
+        let sync = PublishDefaults.shared
+        let hasFolder = sync.folder != nil
+        let folderName = NSTextField(labelWithString: sync.folder.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "None (off)")
+        folderName.font = Theme.font(12)
+        folderName.textColor = Theme.dimText
+        folderName.lineBreakMode = .byTruncatingMiddle
+        folderName.widthAnchor.constraint(lessThanOrEqualToConstant: 190).isActive = true
+        let chooseFolder = NSButton(title: "Choose…", target: self, action: #selector(chooseDefaultsFolder))
+        chooseFolder.bezelStyle = .rounded
+        let clearFolder = NSButton(title: "Clear", target: self, action: #selector(clearDefaultsFolder))
+        clearFolder.bezelStyle = .rounded
+        clearFolder.isEnabled = hasFolder
+        let folderRow = NSStackView(views: [chooseFolder, clearFolder, folderName])
+        folderRow.spacing = 8
+        folderRow.alignment = .centerY
+        stack.addArrangedSubview(row("Shared defaults folder", folderRow))
+        let publishButton = NSButton(title: "Publish my defaults", target: self, action: #selector(publishDefaults))
+        publishButton.bezelStyle = .rounded
+        publishButton.isEnabled = hasFolder
+        let applyButton = NSButton(title: "Apply now", target: self, action: #selector(applyDefaultsNow))
+        applyButton.bezelStyle = .rounded
+        applyButton.isEnabled = hasFolder
+        let buttons = NSStackView(views: [publishButton, applyButton])
+        buttons.spacing = 8
+        stack.addArrangedSubview(buttons)
+        let autoApply = checkbox("Apply published defaults from other Macs automatically", on: sync.autoApply,
+                                 action: #selector(defaultsAutoApplyToggled(_:)))
+        autoApply.isEnabled = hasFolder
+        stack.addArrangedSubview(autoApply)
+        let status = NSTextField(wrappingLabelWithString: sync.statusLine)
+        status.font = Theme.font(12)
+        status.textColor = Theme.dimText
+        status.preferredMaxLayoutWidth = 472
+        status.widthAnchor.constraint(equalToConstant: 472).isActive = true
+        stack.addArrangedSubview(status)
+        stack.addArrangedSubview(note("Every setting, shortcuts included. Not: screen places, permission prompts, this group. Home folders as ~/…"))
 
         // Shortcuts
         stack.addArrangedSubview(separator())
@@ -602,6 +645,38 @@ final class SettingsWindowController: NSWindowController {
     @objc private func clearWatermarkImage() {
         UserDefaults.standard.removeObject(forKey: Prefs.wmImage)
         watermarkImageLabel?.stringValue = "None"
+    }
+
+    // MARK: Defaults
+
+    @objc private func rebuildIfShown() {
+        if window?.isVisible == true { rebuild() }
+    }
+
+    @objc private func chooseDefaultsFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "A folder all your Macs can reach: iCloud Drive, a synced folder or a network folder."
+        panel.prompt = "Use Folder"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        PublishDefaults.shared.folder = url
+        rebuild()
+    }
+
+    @objc private func clearDefaultsFolder() {
+        PublishDefaults.shared.folder = nil
+        rebuild()
+    }
+
+    @objc private func publishDefaults() { PublishDefaults.shared.publish() }
+
+    @objc private func applyDefaultsNow() { PublishDefaults.shared.check(force: true) }
+
+    @objc private func defaultsAutoApplyToggled(_ sender: NSButton) {
+        PublishDefaults.shared.autoApply = sender.state == .on
     }
 
     /// Rejects reserved and duplicate combinations; otherwise saves, which re-registers the hotkeys.

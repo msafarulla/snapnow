@@ -1,0 +1,381 @@
+import AppKit
+import SystemConfiguration
+
+/// Settings › Defaults: the same settings on every Mac. "Publish my defaults" writes every user setting (the `settings`
+/// below minus the `excluded` ones) to snapnow-defaults.json in a folder the user's Macs share (iCloud Drive, a synced or
+/// network folder); every other Mac with the switch on applies a publish it has not applied yet, never its own (format and
+/// rules: DefaultsFile). Publishing is only ever by hand, so applying never publishes anything back.
+final class PublishDefaults {
+    static let shared = PublishDefaults()
+    /// Defaults from another Mac were applied (Settings rebuilds to show them).
+    static let changed = Notification.Name("SnapNowPublishedDefaultsApplied")
+    /// The folder, the switch or the status line changed.
+    static let statusChanged = Notification.Name("SnapNowPublishedDefaultsStatus")
+
+    // MARK: - What is published
+
+    /// Every user setting the app keeps, with the settings code's own check for its values. ALL OF THEM ARE PUBLISHED, except
+    /// the keys in `excluded` below. Dart-owned values are checked for their type here and parsed by the editor exactly as
+    /// when it reads them at startup (unknown names fall back to the built-in default there). Paths (`.path`) go as "~/..."
+    /// and are applied only where that folder or file exists.
+    /// A NEW SETTING MUST BE REGISTERED HERE (one line: its type and rule; it is then published) OR, IF IT CANNOT WORK ON
+    /// ANOTHER MAC, ADDED TO `excluded` WITH THE REASON: test/publish_defaults_keys_test.dart finds the keys used in lib/ and
+    /// macos/Runner and fails on one that is in neither.
+    static let settings: [DefaultsFile.Entry] = [
+        // settings-keys:begin
+        // Markup tools (editor_page.dart, quick_styles.dart): style per kind (heads, head size, thickness, pattern, tapered,
+        // outline, shadow, border, snake skin...), text and callout formats, My Styles, bubble and step shapes, curves
+        .json("style.arrow"),
+        .json("style.line"),
+        .json("style.shape"),
+        .json("style.textFormat.text"),
+        .json("style.textFormat.callout"),
+        .json("myQuickStyles"),
+        .text("callout.style"),
+        .text("step.style"),
+        .bool("followDrag"),
+        // Editor window and toolbar: tools shown, toolbar side, inspector, pin on top, hidden built-in logos
+        .intArray("toolbarTools") { Tool(rawValue: $0) != nil },
+        .bool("toolbar.left"),
+        .bool("inspector.hidden"),
+        .bool("pinOnTop"),
+        .text("logos.hidden"),
+        .text("appearance") { AppearanceChoice(rawValue: $0) != nil },
+        // Draw mode: on/off, its colour and tool, strip, inspector, glass, closing and closing speed
+        .bool("liveDrawMode"),
+        .intText("draw.color", 0...0xFFFF_FFFF),
+        .text("draw.tool"),
+        .text("draw.toolbar"),
+        .bool("draw.inspector"),
+        .choice("liveDrawGlass", Prefs.glassChoices.map { String($0.value) }),
+        .choice("liveDrawClose", DrawClose.allCases.map(\.rawValue)),
+        .choice("liveDrawCloseSpeed", DrawCloseSpeed.allCases.map(\.rawValue)),
+        .bool("liveDrawCloseAnimation"),                       // read only while liveDrawClose is unset
+        // Global keys and gestures (the shortcuts themselves and their on/off flags: `shortcuts` below)
+        .text("hotkeys.mode") { Shell.HotkeyMode(rawValue: $0) != nil },
+        .bool("matrixRain"),
+        .bool("altClickHand"),
+        // Effects and output: GIF entrance, size and frame rate, Manim render height, Save As format
+        .text("gifEntrance"),
+        .bool("gifFourier"),                                   // the older on/off form of gifEntrance
+        .intText("gifMaxSide"),
+        .choice("gifFps", Prefs.gifFpsChoices),
+        .intText("manimRenderH"),
+        .text("saveAs.defaultFormat") { name in name.isEmpty || SaveAs.available.contains { $0.name == name } },
+        // Capture: the panel's settings and presets, what happens after a capture, stamp, corners, crop
+        .json("captureConfig", CaptureConfig.decodes),
+        .json("capturePresets", CaptureConfig.decodesPresets),
+        .bool("openEditorAfterCapture"),
+        .bool("copyAfterCapture"),
+        .bool("regionCapture.rememberArea"),
+        .bool("capture.stampTime"),
+        .bool("capture.roundCorners"),
+        .bool("capture.openInCrop"),
+        // Recording and transcripts
+        .bool("recordMicrophone"),
+        .bool("recordSystemAudio"),
+        .choice("recordingQuality", RecordingQuality.allCases.map(\.rawValue)),
+        .bool("transcribeRecordings"),
+        .text("transcriptLanguage"),                           // a language this Mac cannot transcribe shows in Settings as chosen
+        // Watermark
+        .bool("watermark.enabled"),
+        .text("watermark.text"),
+        .choice("watermark.placement", Prefs.wmPlacements),
+        .int("watermark.opacity", 5...100),                    // the Settings slider's range
+        .path("watermark.imagePath"),                          // a copy in Application Support: applied where that file exists
+        // Scheduled captures
+        .number("schedule.interval") { $0 > 0 },
+        .path("schedule.folder"),
+        // settings-keys:end
+    ] + shortcuts
+
+    /// "shortcut.<action>" (the key, JSON {keyCode, modifiers}) and "shortcut.<action>.enabled" for every global shortcut.
+    static let shortcuts: [DefaultsFile.Entry] = ShortcutAction.allCases.flatMap { action -> [DefaultsFile.Entry] in
+        [.json("shortcut.\(action.rawValue)") { (try? JSONDecoder().decode(Shortcut.self, from: $0)) != nil },
+         .bool("shortcut.\(action.rawValue).enabled")]
+    }
+
+    /// The only keys never published, each with the reason (they cannot work or make no sense on another Mac).
+    static let excluded: [String: String] = [
+        // excluded-keys:begin
+        "regionCapture.lastArea": "screen coordinates of the last capture area; displays differ from Mac to Mac",
+        "saveAs.format": "the format last used in Save As (history; the chosen default saveAs.defaultFormat is published)",
+        "schedule.running": "whether a scheduled capture is running on this Mac right now (run state; it resumes at launch)",
+        "screenPermission.grantedBuild": "the build Screen Recording was granted to on this Mac (system permission state)",
+        "liveDraw.promptedAccessibility": "the Accessibility prompt was shown on this Mac (first-run state)",
+        "liveDraw.promptedInputMonitoring": "the Input Monitoring prompt was shown on this Mac (first-run state)",
+        "sharedDefaults.folder": "this feature's shared folder: each Mac picks its own way to reach it",
+        "sharedDefaults.autoApply": "this feature's switch: each Mac decides whether it follows the others",
+        "sharedDefaults.installId": "identifies this app install so that its own publish is never applied here",
+        "sharedDefaults.lastAppliedId": "bookkeeping: the publish applied last on this Mac",
+        "sharedDefaults.lastApplied": "bookkeeping: when and from which Mac defaults were applied here",
+        "sharedDefaults.lastPublished": "bookkeeping: the newest publish seen in the folder",
+        // excluded-keys:end
+    ]
+
+    /// What goes into the file and what is taken from it.
+    static var published: [DefaultsFile.Entry] { settings.filter { excluded[$0.key] == nil } }
+
+    // MARK: - State (per Mac)
+
+    private static let folderKey = "sharedDefaults.folder"
+    private static let autoApplyKey = "sharedDefaults.autoApply"
+    private static let installIdKey = "sharedDefaults.installId"           // random, made once per install
+    private static let lastAppliedIdKey = "sharedDefaults.lastAppliedId"
+    private static let lastAppliedKey = "sharedDefaults.lastApplied"       // ["at": Date, "mac": String]
+    private static let lastPublishedKey = "sharedDefaults.lastPublished"   // the newest publish seen: ["at", "mac", "own"]
+
+    private let defaults = UserDefaults.standard
+    /// Every file access: a network volume that stops answering blocks this queue, never the app.
+    private let io = DispatchQueue(label: "snapnow.publish-defaults", qos: .utility)
+    private var stream: FSEventStreamRef?
+    private var watchedPath: String?
+    private var checkWork: DispatchWorkItem?
+    private var reading = false
+    private var readAgain = false
+    /// Why the last look at the folder applied nothing (or not everything), for the status line; nil when all is well.
+    private(set) var problem: String?
+
+    /// Empty = the feature is off.
+    var folder: URL? {
+        get { defaults.string(forKey: Self.folderKey).flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) } }
+        set {
+            if let newValue { defaults.set(newValue.path, forKey: Self.folderKey) } else { defaults.removeObject(forKey: Self.folderKey) }
+            problem = nil
+            watch()
+            postStatus()
+            scheduleCheck(after: 0.2)
+        }
+    }
+
+    /// On by default once a folder is set.
+    var autoApply: Bool {
+        get { Prefs.onByDefault(Self.autoApplyKey) }
+        set {
+            defaults.set(newValue, forKey: Self.autoApplyKey)
+            postStatus()
+            if newValue { scheduleCheck(after: 0.2) }
+        }
+    }
+
+    private var installId: String {
+        if let id = defaults.string(forKey: Self.installIdKey), !id.isEmpty { return id }
+        let id = UUID().uuidString
+        defaults.set(id, forKey: Self.installIdKey)
+        return id
+    }
+
+    /// The computer name the system reports (System Settings › General › Sharing).
+    static var macName: String {
+        (SCDynamicStoreCopyComputerName(nil, nil) as String?).flatMap { $0.isEmpty ? nil : $0 } ?? "Mac"
+    }
+
+    private static var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        return (info?["CFBundleVersion"] as? String).map { "\(short)+\($0)" } ?? short
+    }
+
+    // MARK: - Start, watch
+
+    /// At launch: watch the folder and look at it once the editor's side is up; again whenever SnapNow becomes active and
+    /// when draw mode has closed (a publish that came in while drawing).
+    func start() {
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.scheduleCheck()
+        }
+        NotificationCenter.default.addObserver(forName: LiveDraw.ended, object: nil, queue: .main) { [weak self] _ in
+            self?.scheduleCheck()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.watch()
+            self?.scheduleCheck(after: 0)
+        }
+    }
+
+    /// File system events for the folder (FSEvents also reports a file replaced by a rename, and the folder going away).
+    /// A network volume does not report other Macs' writes: those are picked up at launch and when SnapNow becomes active.
+    private func watch() {
+        stopWatching()
+        guard let path = folder?.path else { return }
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+                                           retain: nil, release: nil, copyDescription: nil)
+        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+            guard let info else { return }
+            Unmanaged<PublishDefaults>.fromOpaque(info).takeUnretainedValue().scheduleCheck()
+        }
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot)
+        guard let s = FSEventStreamCreate(nil, callback, &context, [path] as CFArray,
+                                          FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5, flags) else { return }
+        FSEventStreamSetDispatchQueue(s, .main)
+        FSEventStreamStart(s)
+        stream = s
+        watchedPath = path
+    }
+
+    private func stopWatching() {
+        guard let s = stream else { return }
+        FSEventStreamStop(s)
+        FSEventStreamInvalidate(s)
+        FSEventStreamRelease(s)
+        stream = nil
+        watchedPath = nil
+    }
+
+    /// Bursts of events (the temp file, the rename, a sync client's own steps) end in one look.
+    private func scheduleCheck(after delay: TimeInterval = 0.7) {
+        checkWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.check() }
+        checkWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    // MARK: - Publish
+
+    /// "Publish my defaults": the settings, written whole into the folder.
+    func publish() {
+        guard let folder else { return }
+        let p = DefaultsFile.Publish(publishedAt: Date(), publishId: UUID().uuidString, mac: Self.macName, installId: installId,
+                                     appVersion: Self.appVersion, values: DefaultsFile.snapshot(defaults, entries: Self.published))
+        guard let data = try? DefaultsFile.encode(p) else { return }
+        io.async {
+            var failure: String?
+            do { try DefaultsFile.write(data, to: folder) } catch { failure = error.localizedDescription }
+            DispatchQueue.main.async {
+                if let failure {
+                    self.problem = "Could not publish: \(failure)"
+                    Toast.show("Could not publish the defaults", symbol: "exclamationmark.triangle.fill", detail: failure)
+                } else {
+                    self.problem = nil
+                    self.noteSeen(p)
+                }
+                self.postStatus()
+            }
+        }
+    }
+
+    // MARK: - Apply
+
+    /// Looks at the folder and applies a publish from another Mac that was not applied yet. [force] = "Apply now": works with
+    /// the switch off and applies the file again even if it was applied before (never this Mac's own publish).
+    func check(force: Bool = false) {
+        guard let folder, force || autoApply else { return }
+        if reading { readAgain = true; return }
+        reading = true
+        io.async {
+            let result = DefaultsFile.read(folder: folder)
+            DispatchQueue.main.async {
+                self.reading = false
+                self.handle(result, force: force)
+                if self.readAgain { self.readAgain = false; self.scheduleCheck() }
+            }
+        }
+    }
+
+    private func handle(_ result: DefaultsFile.ReadResult, force: Bool) {
+        if case .unreachable = result { stopWatching() } else if stream == nil || watchedPath != folder?.path { watch() }
+        switch result {
+        case .unreachable: problem = "The shared folder cannot be reached (not mounted or removed)"
+        case .missing: problem = force ? "Nothing has been published to the folder yet" : nil
+        case .downloading: problem = "Waiting for iCloud Drive to download the file"
+        case .malformed: problem = "The published file could not be read (half written or damaged); skipped"
+        case .newer(let v): problem = "Published by a newer SnapNow (file format \(v)); update this Mac to apply it"
+        case .ok(let p):
+            noteSeen(p)
+            switch DefaultsFile.decide(p, installId: installId, lastAppliedId: defaults.string(forKey: Self.lastAppliedIdKey), force: force) {
+            case .own: problem = force ? "The file holds this Mac's own publish; nothing to apply" : nil
+            case .alreadyApplied: problem = nil
+            case .apply: applyWhenNotDrawing(p, force: force)
+            }
+        }
+        postStatus()
+    }
+
+    /// Never in the middle of drawing: draw mode's glass up (it closes → LiveDraw.ended → another look) or a stroke, drag or
+    /// text edit under way in the editor (asked again shortly).
+    private func applyWhenNotDrawing(_ p: DefaultsFile.Publish, force: Bool) {
+        if LiveDraw.shared.busy {
+            problem = "Defaults from \(p.mac) wait until draw mode closes"
+            return
+        }
+        editorIsDrawing { [weak self] drawing in
+            guard let self else { return }
+            if drawing {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.check(force: force) }
+            } else {
+                self.apply(p)
+            }
+        }
+    }
+
+    /// The editor's answer to "defaultsBusy"; no answer within half a second (no editor yet, an older Dart side) = not drawing.
+    private func editorIsDrawing(_ done: @escaping (Bool) -> Void) {
+        guard let native = SnapLiteNative.shared else { return done(false) }
+        var answered = false
+        native.invoke("defaultsBusy", nil) { result in
+            guard !answered else { return }
+            answered = true
+            done((result as? Bool) ?? false)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard !answered else { return }
+            answered = true
+            done(false)
+        }
+    }
+
+    private func apply(_ p: DefaultsFile.Publish) {
+        let r = DefaultsFile.apply(p.values, to: defaults, entries: Self.published)
+        var kept: [String] = []
+        if !r.missing.isEmpty { kept.append("Skipped \(r.missing.joined(separator: ", ")): that folder or file is not on this Mac") }
+        if !r.rejected.isEmpty { kept.append("Kept this Mac's own \(r.rejected.joined(separator: ", ")): not valid here") }
+        defaults.set(p.publishId, forKey: Self.lastAppliedIdKey)
+        defaults.set(["at": Date(), "mac": p.mac, "note": kept.joined(separator: ". ")] as [String: Any], forKey: Self.lastAppliedKey)
+        problem = nil
+        // Live: the global keys are registered again (Shell) and Settings rebuilt; the theme everywhere; the toolbar list
+        let touched = Set(r.applied)
+        if touched.contains(where: { $0.hasPrefix("shortcut.") }) || touched.contains("hotkeys.mode") || touched.contains("matrixRain") {
+            NotificationCenter.default.post(name: Shortcuts.changed, object: nil)
+        }
+        if touched.contains("appearance") { Theme.choice = Theme.choice }   // sets NSApp.appearance and posts Theme.changed
+        if touched.contains("toolbarTools") { NotificationCenter.default.post(name: ToolbarPrefs.changed, object: nil) }
+        NotificationCenter.default.post(name: Self.changed, object: nil)
+        SnapLiteNative.shared?.invoke("defaultsChanged", r.applied)   // the editor reads its settings again
+        Toast.show("Defaults updated from \(p.mac)", symbol: "arrow.triangle.2.circlepath")
+        postStatus()
+    }
+
+    // MARK: - Status line
+
+    private func noteSeen(_ p: DefaultsFile.Publish) {
+        defaults.set(["at": p.publishedAt, "mac": p.mac, "own": p.installId == installId] as [String: Any], forKey: Self.lastPublishedKey)
+    }
+
+    private func postStatus() {
+        NotificationCenter.default.post(name: Self.statusChanged, object: nil)
+    }
+
+    /// Last published: when and from which Mac; last applied: when and from which Mac; and what went wrong, if anything.
+    var statusLine: String {
+        guard folder != nil else { return "Off: choose a shared folder to publish or receive defaults." }
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        f.doesRelativeDateFormatting = true
+        var line: String
+        if let seen = defaults.dictionary(forKey: Self.lastPublishedKey), let at = seen["at"] as? Date {
+            let own = (seen["own"] as? Bool) == true ? " (this Mac)" : ""
+            line = "Last published \(f.string(from: at)) from \(seen["mac"] as? String ?? "a Mac")\(own)"
+        } else {
+            line = "Nothing published yet"
+        }
+        if let done = defaults.dictionary(forKey: Self.lastAppliedKey), let at = done["at"] as? Date {
+            line += "; last applied \(f.string(from: at)) from \(done["mac"] as? String ?? "a Mac")."
+            if let note = done["note"] as? String, !note.isEmpty { line += " \(note)." }   // keys skipped or kept then
+        } else {
+            line += "; nothing applied here yet."
+        }
+        if let problem { line += " \(problem)." }
+        return line
+    }
+}

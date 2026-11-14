@@ -102,6 +102,7 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
         }
         ScheduledCapture.shared.resumeIfRunning()
         setUpRecorder()
+        PublishDefaults.shared.start()   // Settings › Defaults: defaults published from another Mac
     }
 
     // MARK: - Menus

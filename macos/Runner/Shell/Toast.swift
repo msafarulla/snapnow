@@ -471,6 +471,8 @@ final class AltClickHand {
 /// Option+click hand and Option shortcuts never count). Needs Accessibility for the global modifier monitor.
 final class LiveDraw {
     static let shared = LiveDraw()
+    /// A session is over and its drawing saved (Settings › Defaults then applies what came in meanwhile).
+    static let ended = Notification.Name("SnapNowDrawModeEnded")
     private(set) var active = false
     private var monitors: [Any] = []
     private var downAt: Date?
@@ -855,6 +857,8 @@ final class LiveDraw {
     }
 
     private var leaving = false
+    /// The glass is up, or still being lifted and saved: Settings › Defaults applies nothing meanwhile.
+    var busy: Bool { active || leaving }
     /// The last "One by one" close (test control status.json "lastDrawClose"): speed, flight or fade, whether the editor
     /// answered before the wait ran out, and how long it took.
     private(set) var lastClose: [String: Any]?
@@ -1032,6 +1036,7 @@ final class LiveDraw {
                 }
                 self.session = nil
                 self.leaving = false
+                NotificationCenter.default.post(name: LiveDraw.ended, object: nil)
                 if self.openWhenDone { self.openWhenDone = false; self.enter() }
             }
             if let invoker = SnapLiteNative.shared {

@@ -27,6 +27,10 @@ class Native {
   static void Function(String choice)? onAppearanceChanged;
   /// A movie's transcript changed (state, progress…; see TranscriptInfo in library/transcripts.dart).
   static void Function(Map<Object?, Object?> info)? onTranscriptChanged;
+  /// Settings › Defaults is about to apply defaults published from another Mac: is something being drawn this moment?
+  static bool Function()? onDefaultsBusy;
+  /// Settings › Defaults applied defaults published from another Mac: read them again.
+  static void Function()? onDefaultsChanged;
 
   static void init() {
     _ch.setMethodCallHandler((call) async {
@@ -50,6 +54,8 @@ class Native {
         case 'colorPicked': onColorPicked?.call(call.arguments as int);
         case 'appearanceChanged': onAppearanceChanged?.call(call.arguments as String);
         case 'transcriptChanged': onTranscriptChanged?.call(call.arguments as Map);
+        case 'defaultsBusy': return onDefaultsBusy?.call() ?? false;
+        case 'defaultsChanged': onDefaultsChanged?.call();
       }
     });
   }

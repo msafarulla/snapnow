@@ -69,6 +69,8 @@ class AppController with TrayListener, WindowListener {
     Native.onShowLibrary = showLibrary;
     Native.onCapturesChanged = () => capturesVersion.value++;
     Native.onAppearanceChanged = (choice) => appearance.value = choice;
+    Native.onDefaultsBusy = () => editorKey.currentState?.drawingNow ?? false;
+    Native.onDefaultsChanged = () => editorKey.currentState?.reloadDefaults();
     appearance.value = await Native.getString('appearance') ?? 'glass';
     await windowManager.ensureInitialized();
     await windowManager.setPreventClose(true);

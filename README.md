@@ -285,6 +285,19 @@ while you have fewer, it's filled with copies of the newest. The clipboard is us
 and put back a minute later. Stickers are fitted into 512 × 512, as WhatsApp requires. Needs WhatsApp for
 Mac.
 
+## Same settings on every Mac
+
+Settings › Defaults: pick a folder all your Macs can reach (iCloud Drive, a synced or network folder) and click
+**Publish my defaults**. SnapNow writes `snapnow-defaults.json` there with all your settings: tool styles and My Styles,
+draw mode, shortcuts and the hotkey mode, what happens after a capture, recording, appearance, toolbar and GIF options,
+watermark and capture presets. Every other Mac using the same folder, with **Apply published defaults from other Macs
+automatically** on, picks it up (when the file changes, at launch and when SnapNow comes to the front), applies it at
+once (shortcuts are registered again) and says "Defaults updated from" that Mac's name. Folders inside your home folder
+travel as `~/…` and apply only where that folder exists. Not published: the last capture area (screen coordinates),
+permission prompts, a scheduled capture's running state, the last-used Save As format and this group's own settings.
+Nothing is applied while you are drawing, and a folder that can't be reached or a damaged file is skipped and shown in
+the status line.
+
 ## The Library
 
 ![The Library: a grid of every capture with search](docs/screenshots/library.png)

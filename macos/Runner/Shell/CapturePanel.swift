@@ -133,6 +133,10 @@ struct CaptureConfig: Codable, Equatable {
         var name: String
         var config: CaptureConfig
     }
+
+    /// Settings › Defaults: published capture settings and presets are checked the way they are read here.
+    static func decodes(_ data: Data) -> Bool { (try? JSONDecoder().decode(CaptureConfig.self, from: data)) != nil }
+    static func decodesPresets(_ data: Data) -> Bool { (try? JSONDecoder().decode([NamedConfig].self, from: data)) != nil }
 }
 
 extension Renderer {

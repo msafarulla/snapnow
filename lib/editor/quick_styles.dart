@@ -62,7 +62,7 @@ class QuickStyles {
 
   static Future<void> load() async {
     final raw = await Native.getDataString(_savedKey);
-    if (raw == null) return;
+    if (raw == null) { _saved = {}; return; } // none saved (or removed by defaults applied from another Mac)
     try {
       final m = jsonDecode(raw) as Map<String, dynamic>;
       _saved = {
