@@ -324,6 +324,23 @@ do {
     check(DefaultsFile.canonical(v1) != DefaultsFile.canonical(["a": 2, "b": ["x": true, "y": [1, 2]], "c": NSNull()]), "a changed value changes the canonical form")
 }
 
+// 1.84.3: a Mac publishes only what it changed, laid over what the file already holds
+do {
+    let shared: [String: Any] = ["draw.color": "1", "style.arrow": ["end": 2], "pinOnTop": true, "gone": "x"]
+    let before: [String: Any] = ["draw.color": "9", "style.arrow": ["end": 2], "pinOnTop": true, "gone": "x"]   // this Mac kept an older colour
+    var now = before
+    now["style.arrow"] = ["end": 3]
+    let changed = DefaultsFile.changedKeys(now, before)
+    check(changed == ["style.arrow"], "only the setting changed here counts as changed")
+    let out = DefaultsFile.merge(shared: shared, local: now, changed: changed)
+    check(DefaultsFile.canonical(out) == DefaultsFile.canonical(["draw.color": "1", "style.arrow": ["end": 3], "pinOnTop": true, "gone": "x"]),
+          "the publish carries the change and leaves the other Macs' colour alone")
+    now.removeValue(forKey: "gone")
+    let c2 = DefaultsFile.changedKeys(now, before)
+    check(c2 == ["style.arrow", "gone"] && DefaultsFile.merge(shared: shared, local: now, changed: c2)["gone"] == nil, "a setting removed here is removed in the publish")
+    check(DefaultsFile.changedKeys(["a": 1, "b": NSNull()], ["a": 1.0, "b": NSNull()]).isEmpty, "1 and 1.0, null and null are the same value")
+}
+
 for name in suites { UserDefaults.standard.removePersistentDomain(forName: name) }
 for url in folders { try? FileManager.default.removeItem(at: url) }
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")

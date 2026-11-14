@@ -7,7 +7,8 @@ import SystemConfiguration
 /// rules: DefaultsFile). With "Publish my changes automatically" on (the default) a change to any published setting on
 /// this Mac is published a moment later, and a publish from another Mac is applied within a few seconds (file events, plus
 /// a 2 s look at the file for network folders), so every Mac ends up with the same SnapNow. What was just applied is never
-/// published back: publishing compares against the values as they stood after the last publish or apply.
+/// published back: a Mac publishes only the settings it changed itself since the last publish or apply, laid over the
+/// values the file already holds (DefaultsFile.merge), so two Macs never undo each other's other settings.
 final class PublishDefaults {
     static let shared = PublishDefaults()
     /// Defaults from another Mac were applied (Settings rebuilds to show them).
@@ -140,9 +141,9 @@ final class PublishDefaults {
     private var readAgain = false
     /// Why the last look at the folder applied nothing (or not everything), for the status line; nil when all is well.
     private(set) var problem: String?
-    /// The published values as they stood after the last publish or apply (DefaultsFile.canonical); nil until the first
-    /// look at the folder is done, so a Mac that starts up never overwrites a newer publish with its older state.
-    private var baseline: Data?
+    /// This Mac's values as they stood after the last publish or apply: what differs from it now is "my change". nil until
+    /// the first look at the folder is done, so a Mac that starts up never overwrites a newer publish with its older state.
+    private var baseline: [String: Any]?
     private var publishWork: DispatchWorkItem?
     private var pendingSince: Date?                     // the first setting written since the last look at "did anything change"
     private var quietUntil = Date.distantPast          // just applied: the app's own follow-up writes are not "my changes"
@@ -229,7 +230,7 @@ final class PublishDefaults {
 
     private func currentValues() -> [String: Any] { DefaultsFile.snapshot(defaults, entries: Self.published) }
 
-    private func rebaseline() { baseline = DefaultsFile.canonical(currentValues()) }
+    private func rebaseline() { baseline = currentValues() }
 
     /// A second after the last write, but never more than three after the first: something else writing settings all the
     /// time (this class's own bookkeeping did, on a network folder) must not put the publish off for ever.
@@ -254,8 +255,9 @@ final class PublishDefaults {
             DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in self?.settingsChanged() }
             return
         }
-        guard DefaultsFile.canonical(currentValues()) != baseline else { return }
-        publish(automatic: true)
+        let changed = DefaultsFile.changedKeys(currentValues(), baseline)
+        guard !changed.isEmpty else { return }
+        publish(automatic: true, only: changed)
     }
 
     // MARK: - Poll (network folders report no file events for other Macs' writes)
@@ -333,20 +335,30 @@ final class PublishDefaults {
 
     // MARK: - Publish
 
-    /// "Publish my defaults" (and every automatic publish): the settings, written whole into the folder, with the folders
-    /// and files the path settings point to (DefaultsFile.publishAssets). [automatic] failures only show in the status line.
-    func publish(automatic: Bool = false) {
+    /// "Publish my defaults": every setting of this Mac, written whole into the folder. An automatic publish ([only] = the
+    /// settings changed here): those settings laid over what the file holds now, so the rest stays as the Macs share it.
+    /// With the folders and files the path settings point to (DefaultsFile.publishAssets). [automatic] failures only show
+    /// in the status line.
+    func publish(automatic: Bool = false, only: Set<String>? = nil) {
         guard let folder else { return }
         publishWork?.cancel()
-        let values = currentValues()
-        let snapshot = DefaultsFile.canonical(values)
+        pendingSince = nil
+        let local = currentValues()
         var p = DefaultsFile.Publish(publishedAt: Date(), publishId: UUID().uuidString, mac: Self.macName, installId: installId,
-                                     appVersion: Self.appVersion, values: values)
+                                     appVersion: Self.appVersion, values: local)
         io.async {
             var failure: String?
-            let extra = DefaultsFile.publishAssets(values, entries: Self.published, to: folder)
-            p.folders = extra.folders
-            p.assets = extra.assets
+            var changedEntries = Self.published
+            var keptAssets: [String: String] = [:], keptFolders: [String] = []
+            if let only, case .ok(let shared) = DefaultsFile.read(folder: folder) {
+                p.values = DefaultsFile.merge(shared: shared.values, local: local, changed: only)
+                changedEntries = Self.published.filter { only.contains($0.key) }
+                keptAssets = shared.assets.filter { !only.contains($0.key) }
+                keptFolders = shared.folders.filter { !only.contains($0) }
+            }
+            let extra = DefaultsFile.publishAssets(local, entries: changedEntries, to: folder, keep: Set(keptAssets.values))
+            p.folders = Array(Set(keptFolders).union(extra.folders)).sorted()
+            p.assets = keptAssets.merging(extra.assets) { _, new in new }
             do { try DefaultsFile.write(try DefaultsFile.encode(p), to: folder) } catch { failure = error.localizedDescription }
             DispatchQueue.main.async {
                 if let failure {
@@ -354,7 +366,8 @@ final class PublishDefaults {
                     if !automatic { Toast.show("Could not publish the defaults", symbol: "exclamationmark.triangle.fill", detail: failure) }
                 } else {
                     self.problem = nil
-                    self.baseline = snapshot             // what the other Macs have now; a failed publish is tried again on the next change
+                    // sent: no longer "my change" (a setting changed again meanwhile still differs from this and goes next)
+                    self.baseline = local
                     self.noteSeen(p)
                 }
                 self.postStatus()
@@ -442,8 +455,11 @@ final class PublishDefaults {
 
     private func apply(_ p: DefaultsFile.Publish) {
         quietUntil = Date().addingTimeInterval(1.5)       // the editor reads its settings again; a publish waits until it has
-        let r = DefaultsFile.apply(p.values, to: defaults, entries: Self.published, folders: p.folders, assets: p.assets,
-                                   sharedFolder: folder)
+        // a setting changed here a moment ago and not sent yet stays as it is here (it goes out next and wins as the later change)
+        let before = currentValues()
+        let mine = autoPublish ? (baseline.map { DefaultsFile.changedKeys(before, $0) } ?? []) : []
+        let r = DefaultsFile.apply(p.values.filter { !mine.contains($0.key) }, to: defaults, entries: Self.published,
+                                   folders: p.folders, assets: p.assets, sharedFolder: folder)
         var kept: [String] = []
         if !r.missing.isEmpty { kept.append("Skipped \(r.missing.joined(separator: ", ")): that folder or file is not on this Mac") }
         if !r.rejected.isEmpty { kept.append("Kept this Mac's own \(r.rejected.joined(separator: ", ")): not valid here") }
@@ -465,7 +481,10 @@ final class PublishDefaults {
         }
         lastToast = Date()
         // what this Mac holds now is what was published: not a change of its own. Again once the editor has settled.
-        rebaseline()
+        var settled = currentValues()
+        if let old = baseline { for k in mine { if let v = old[k] { settled[k] = v } else { settled.removeValue(forKey: k) } } }
+        baseline = settled
+        if !mine.isEmpty { settingsChanged() }
         postStatus()
     }
 

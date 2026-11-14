@@ -159,6 +159,27 @@ enum DefaultsFile {
         }
     }
 
+    /// The keys whose value is not the same in [a] and [b] (a key only one of them has counts).
+    static func changedKeys(_ a: [String: Any], _ b: [String: Any]) -> Set<String> {
+        var out = Set<String>()
+        for k in Set(a.keys).union(b.keys) {
+            guard let x = a[k], let y = b[k] else { out.insert(k); continue }
+            if canonical(["v": x]) != canonical(["v": y]) { out.insert(k) }
+        }
+        return out
+    }
+
+    /// What a Mac publishes after changing only [changed]: the values every Mac already shares ([shared], the file as it
+    /// stands) with this Mac's [local] value for each changed key. So a Mac sends its changes, never the rest of its state,
+    /// and two Macs changing different settings do not undo each other.
+    static func merge(shared: [String: Any], local: [String: Any], changed: Set<String>) -> [String: Any] {
+        var out = shared
+        for k in changed {
+            if let v = local[k] { out[k] = v } else { out.removeValue(forKey: k) }
+        }
+        return out
+    }
+
     /// The published values in one fixed byte form, to tell "something changed" from "nothing did".
     static func canonical(_ values: [String: Any]) -> Data {
         (try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])) ?? Data()
@@ -167,8 +188,9 @@ enum DefaultsFile {
     /// For the path settings in [values] ("~/..."): which are folders, and a copy of each file (up to maxAssetBytes) in
     /// [folder]/assets under its content hash, written whole or not at all and only when missing. Copies no published
     /// setting points to any more are removed (only here, when publishing; never when applying).
+    /// [keep] = asset names other settings of the publish still point to (settings this Mac did not change).
     static func publishAssets(_ values: [String: Any], entries: [Entry], to folder: URL, home: String = NSHomeDirectory(),
-                              fileManager fm: FileManager = .default) -> (folders: [String], assets: [String: String]) {
+                              fileManager fm: FileManager = .default, keep: Set<String> = []) -> (folders: [String], assets: [String: String]) {
         var folders: [String] = [], assets: [String: String] = [:]
         let dir = folder.appendingPathComponent(assetsFolder, isDirectory: true)
         for e in entries where e.kind == .path {
@@ -189,7 +211,7 @@ enum DefaultsFile {
             }
             assets[e.key] = name
         }
-        let wanted = Set(assets.values)
+        let wanted = Set(assets.values).union(keep)
         for old in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where !wanted.contains(old) && !old.hasPrefix(".") {
             try? fm.removeItem(at: dir.appendingPathComponent(old))
         }
