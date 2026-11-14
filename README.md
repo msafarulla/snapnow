@@ -290,7 +290,7 @@ Mac.
 Rest the pointer in the middle of the menu bar and a strip slides down with your newest captures hanging on a line.
 Drag one straight into any app (a chat, a mail, a document, an upload field, Finder): a copy goes there and the capture
 stays where it is. Click a capture to copy it, double-click to open it in the editor, right-click for Show in Finder,
-Take Off the Line (the file stays in the Library) and Move to Trash. Move the pointer away and the strip goes back up; it
+Take Off the Line (the file stays in the Library) and Move to Trash. With more captures than fit, scroll sideways (two fingers or the wheel) to reach the older ones. Move the pointer away and the strip goes back up; it
 also comes down for a moment after each capture. Both behaviours are switches in Settings › Capture line, and the menu
 has Show Capture Line. The strip is never part of a capture or a shared screen.
 

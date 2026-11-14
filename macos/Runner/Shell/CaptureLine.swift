@@ -211,8 +211,7 @@ final class CaptureLine: NSObject {
     private func reload(width: CGFloat? = nil) {
         guard let lineView else { return }
         let w = width ?? lineView.bounds.width
-        let count = max(1, min(14, Int((w - 80) / CaptureLineView.slot)))
-        lineView.setFiles(files(limit: count), width: w)
+        lineView.setFiles(files(limit: 80), width: w)      // more than fit: the line scrolls
     }
 
     // MARK: - While dragging one out
@@ -289,21 +288,44 @@ final class CaptureLineView: NSView {
         return 12 + 4 * 12 * t * (1 - t)
     }
 
+    /// How far the line is scrolled: 0 = the newest capture at its starting place, growing towards the older ones.
+    private var offset: CGFloat = 0
+    private var lineWidth: CGFloat = 0
+
     func setFiles(_ files: [URL], width: CGFloat) {
-        if files == shown, abs(bounds.width - width) < 1, !cards.isEmpty { return }
+        if files == shown, abs(lineWidth - width) < 1, !cards.isEmpty { return }
+        let sameSet = files.first == shown.first
         shown = files
+        lineWidth = width
         cards.forEach { $0.removeFromSuperview() }
-        cards = []
-        let total = CGFloat(files.count) * Self.slot
-        var x = (width - total) / 2 + Self.slot / 2
-        for (i, url) in files.enumerated() {
-            let card = CaptureCardView(url: url, owner: owner, tilt: i % 2 == 0 ? -1.6 : 1.4)
-            card.hang(centerX: x, top: cordY(at: x, width: width) - 5)
-            addSubview(card)
-            cards.append(card)
-            x += Self.slot
+        cards = files.enumerated().map { i, url in CaptureCardView(url: url, owner: owner, tilt: i % 2 == 0 ? -1.6 : 1.4) }
+        cards.forEach { addSubview($0) }
+        if !sameSet { offset = 0 }                 // a new capture: back to the newest
+        place()
+    }
+
+    /// What does not fit to the right is reached by scrolling.
+    private var maxOffset: CGFloat { max(0, CGFloat(cards.count) * Self.slot + 40 - lineWidth) }
+
+    /// The cards along the cord: centred when they all fit, otherwise from the left edge, newest first, shifted by the scroll.
+    private func place() {
+        offset = max(0, min(maxOffset, offset))
+        let total = CGFloat(cards.count) * Self.slot
+        let start = (total + 40 <= lineWidth ? (lineWidth - total) / 2 : 20) + Self.slot / 2 - offset
+        for (i, card) in cards.enumerated() {
+            let x = start + CGFloat(i) * Self.slot
+            card.isHidden = x < -Self.slot || x > lineWidth + Self.slot
+            if !card.isHidden { card.hang(centerX: x, top: cordY(at: x, width: lineWidth) - 5) }
         }
         needsDisplay = true
+    }
+
+    /// Two fingers sideways (or up and down), or a mouse wheel, move along the line.
+    override func scrollWheel(with event: NSEvent) {
+        guard maxOffset > 0 else { return }
+        let dx = abs(event.scrollingDeltaX) >= abs(event.scrollingDeltaY) ? -event.scrollingDeltaX : -event.scrollingDeltaY
+        offset += dx * (event.hasPreciseScrollingDeltas ? 1 : 12)
+        place()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -317,6 +339,9 @@ final class CaptureLineView: NSView {
         cord.lineWidth = 2
         NSColor.white.withAlphaComponent(0.85).setStroke()
         cord.stroke()
+        let hint: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 20, weight: .semibold), .foregroundColor: NSColor.white.withAlphaComponent(0.8)]
+        if offset > 1 { ("‹" as NSString).draw(at: NSPoint(x: 6, y: 58), withAttributes: hint) }
+        if offset < maxOffset - 1 { ("›" as NSString).draw(at: NSPoint(x: w - 16, y: 58), withAttributes: hint) }
         if cards.isEmpty {
             let text = "No captures yet"
             let attrs: [NSAttributedString.Key: Any] = [.font: Theme.font(13), .foregroundColor: NSColor.white.withAlphaComponent(0.85)]
