@@ -1069,6 +1069,7 @@ enum RecorderTestControl {
         status["movie"] = r.moviePath ?? NSNull()
         status["overlayWindows"] = r.overlayWindowIDs.sorted().map { Int($0) }
         status["drawMode"] = LiveDraw.shared.active
+        status["drawScreen"] = LiveDraw.shared.drawScreenName ?? ""
         status["drawClose"] = DrawClose.current.rawValue
         status["drawCloseSpeed"] = DrawCloseSpeed.current.rawValue
         status["colorPanel"] = LiveDraw.shared.colorPanelStatus

@@ -482,6 +482,8 @@ final class LiveDraw {
                     spaces: NSWindow.CollectionBehavior)?
     /// The display draw mode opened on, fixed for the whole session (the re-checks after 0.3/0.8 s must not follow the mouse).
     private var drawScreen: NSScreen?
+    /// The display the glass is on (test control status.json "drawScreen").
+    var drawScreenName: String? { drawScreen?.localizedName }
     /// The app you were in when draw mode opened: it gets the focus back when the glass is lifted.
     private var previousApp: NSRunningApplication?
     private var session: (url: URL, modified: Date, size: Int)?
@@ -634,17 +636,24 @@ final class LiveDraw {
     /// else the display under the mouse, else the main display. SnapNow's own windows never decide it.
     static func targetScreen() -> NSScreen? {
         let me = ProcessInfo.processInfo.processIdentifier
+        let underPointer = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
         if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier, front != me {
             let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
             let mainHeight = NSScreen.screens.first?.frame.maxY ?? 0       // CG window bounds are top-left based on the first display
+            var withWindows: [NSScreen] = []                               // front to back
             for w in list where (w[kCGWindowOwnerPID as String] as? pid_t) == front && (w[kCGWindowLayer as String] as? Int) == 0 {
                 guard let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b),
                       r.width > 40, r.height > 40 else { continue }
                 let centre = NSPoint(x: r.midX, y: mainHeight - r.midY)
-                if let s = NSScreen.screens.first(where: { NSMouseInRect(centre, $0.frame, false) }) { return s }
+                if let s = NSScreen.screens.first(where: { NSMouseInRect(centre, $0.frame, false) }), !withWindows.contains(s) { withWindows.append(s) }
             }
+            // The app you are in can have a window on each display (a full-screen one on each, say): then the display you are
+            // pointing at is the one you mean - the glass must not open on the other display and take the keyboard there.
+            // With the pointer on a display where that app has no window, it is the display of its frontmost window, as before.
+            if let underPointer, withWindows.contains(underPointer) { return underPointer }
+            if let first = withWindows.first { return first }
         }
-        return NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
+        return underPointer ?? NSScreen.main
     }
 
     /// A fully transparent PNG the size of the display in pixels: the "glass" the drawing goes on.
