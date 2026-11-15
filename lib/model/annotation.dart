@@ -74,6 +74,14 @@ enum LinePattern {
       };
 }
 
+/// Animated looks for arrows and lines (saved by name). Each one loops once per march cycle, like the marching
+/// patterns, so the editor animates it and Share / ⌘C give a looping GIF. Snake skin is a separate switch.
+enum ArrowEffect {
+  none, neon, flow, electric, fire, pulse, rope;
+
+  String get label => const ['None', 'Neon', 'Colour flow', 'Electric', 'Fire trail', 'Pulse', 'Rope'][index];
+}
+
 /// Which remembered style an annotation or tool uses: arrows, lines, and shapes (box, ellipse, pen).
 enum StyleKind {
   arrow, line, shape;
@@ -104,6 +112,7 @@ class ArrowStyle {
   final bool shadow;
   final bool border; // a thin edge in a darker shade of the line's own colour
   final bool snake; // snake skin: a dark glass tube with glowing scales drifting toward the head
+  final ArrowEffect effect; // an animated look (neon, colour flow, ...); never together with snake
   final Color? borderColor; // the Border edge's colour, or the Outline's when Border is off; null = automatic
   final double? width; // exact line thickness in points (the thickness slider); null = from S / M / L
   const ArrowStyle({
@@ -116,6 +125,7 @@ class ArrowStyle {
     this.shadow = true,
     this.border = false,
     this.snake = false,
+    this.effect = ArrowEffect.none,
     this.borderColor,
     this.width,
   });
@@ -125,32 +135,40 @@ class ArrowStyle {
   static const shape = ArrowStyle(end: ArrowHead.none, shadow: false);
 
   ArrowStyle copyWith({ArrowHead? start, ArrowHead? end, HeadSize? headSize, LinePattern? pattern, bool? tapered,
-          bool? outline, bool? shadow, bool? border, bool? snake}) =>
-      ArrowStyle(
-        start: start ?? this.start,
-        end: end ?? this.end,
-        headSize: headSize ?? this.headSize,
-        pattern: pattern ?? this.pattern,
-        tapered: tapered ?? this.tapered,
-        outline: outline ?? this.outline,
-        shadow: shadow ?? this.shadow,
-        border: border ?? this.border,
-        snake: snake ?? this.snake,
-        borderColor: borderColor,
-        width: width,
-      );
+          bool? outline, bool? shadow, bool? border, bool? snake, ArrowEffect? effect}) {
+    // An effect and Snake skin exclude each other: choosing an effect turns Snake skin off, ticking it clears the effect
+    final fx = effect ?? (snake == true ? ArrowEffect.none : this.effect);
+    final skin = effect != null && effect != ArrowEffect.none ? false : snake ?? this.snake;
+    return ArrowStyle(
+      start: start ?? this.start,
+      end: end ?? this.end,
+      headSize: headSize ?? this.headSize,
+      pattern: pattern ?? this.pattern,
+      tapered: tapered ?? this.tapered,
+      outline: outline ?? this.outline,
+      shadow: shadow ?? this.shadow,
+      border: border ?? this.border,
+      snake: skin,
+      effect: fx,
+      borderColor: borderColor,
+      width: width,
+    );
+  }
 
   ArrowStyle withWidth(double? value) => ArrowStyle(start: start, end: end, headSize: headSize, pattern: pattern,
-      tapered: tapered, outline: outline, shadow: shadow, border: border, snake: snake, borderColor: borderColor, width: value);
+      tapered: tapered, outline: outline, shadow: shadow, border: border, snake: snake, effect: effect, borderColor: borderColor,
+      width: value);
 
   ArrowStyle withBorderColor(Color? value) => ArrowStyle(start: start, end: end, headSize: headSize, pattern: pattern,
-      tapered: tapered, outline: outline, shadow: shadow, border: border, snake: snake, borderColor: value, width: width);
+      tapered: tapered, outline: outline, shadow: shadow, border: border, snake: snake, effect: effect, borderColor: value,
+      width: width);
 
   Map<String, Object> toJson() => {
         'start': start.index, 'end': end.index, 'headSize': headSize.index, 'pattern': pattern.index,
         'tapered': tapered, 'outline': outline, 'shadow': shadow,
         if (border) 'border': true,
         if (snake) 'snake': true,
+        if (effect != ArrowEffect.none) 'effect': effect.name,
         if (borderColor != null) 'borderColor': borderColor!.toARGB32(),
         if (width != null) 'width': width!,
       };
@@ -168,6 +186,9 @@ class ArrowStyle {
       shadow: json['shadow'] != false,
       border: json['border'] == true,
       snake: json['snake'] == true,
+      effect: json['snake'] == true
+          ? ArrowEffect.none
+          : ArrowEffect.values.firstWhere((e) => e.name == json['effect'], orElse: () => ArrowEffect.none),
       borderColor: json['borderColor'] is int ? Color(json['borderColor'] as int) : null,
       width: (json['width'] as num?)?.toDouble(),
     );
@@ -177,10 +198,11 @@ class ArrowStyle {
   bool operator ==(Object other) =>
       other is ArrowStyle && other.start == start && other.end == end && other.headSize == headSize &&
       other.pattern == pattern && other.tapered == tapered && other.outline == outline && other.shadow == shadow &&
-      other.border == border && other.snake == snake && other.borderColor == borderColor && other.width == width;
+      other.border == border && other.snake == snake && other.effect == effect &&
+      other.borderColor == borderColor && other.width == width;
 
   @override
-  int get hashCode => Object.hash(start, end, headSize, pattern, tapered, outline, shadow, border, snake, borderColor, width);
+  int get hashCode => Object.hash(start, end, headSize, pattern, tapered, outline, shadow, border, snake, effect, borderColor, width);
 }
 
 /// How Text and Callout annotations set their words: font, exact size, bold/italic/underline, alignment,

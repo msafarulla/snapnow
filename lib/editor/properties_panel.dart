@@ -260,23 +260,38 @@ class PropertiesPanel extends StatelessWidget {
               child: _check(context, 'Marching', style.pattern.marches,
                   (v) => host.setArrowStyle(style.copyWith(pattern: style.pattern.marching(v)))),
             ),
+          if (isLine)
+            _row(context, 'Effect', [
+              Tooltip(
+                message: 'An animated look for the arrow (it moves in the editor and in GIFs)',
+                waitDuration: const Duration(milliseconds: 700),
+                child: _Dropdown<ArrowEffect>(
+                  value: style.effect,
+                  items: [
+                    for (final e in ArrowEffect.values)
+                      (e, e.label, StylePreview(ArrowStyle(end: ArrowHead.triangle, effect: e), color: _previewColor)),
+                  ],
+                  onChanged: (e) => host.setArrowStyle(style.copyWith(effect: e)),
+                ),
+              ),
+            ]),
           _row(context, 'Entrance', [
             Tooltip(
               message: 'How lines, pen strokes and outlines appear in animated GIFs',
               waitDuration: const Duration(milliseconds: 700),
               child: _Segmented<Entrance>(
                 values: [for (final e in Entrance.values) if (e != Entrance.envelope) e], selected: host.gifEntrance, // String art is retired from the choices
-                label: (e) => e.label, tooltip: (e) => e.tip, onTap: host.setGifEntrance, itemWidth: 62),
+                label: (e) => e.label, tooltip: (e) => e.tip, onTap: host.setGifEntrance, itemWidth: 50),
             ),
-          ]),
-          if (host.canPlayEntrance)
-            Row(children: [
+            // On the Entrance row, not a row of its own, so the Effect row above still leaves the panel unscrolled
+            if (host.canPlayEntrance) ...[
               const Spacer(),
               Tooltip(
                 message: 'Watch the selected stroke appear this way',
                 child: _PillButton(icon: Icons.play_arrow, label: 'Play', onTap: host.playEntrance),
               ),
-            ]),
+            ],
+          ]),
           _row(context, 'GIF size', [
             Expanded(
               child: Tooltip(
@@ -349,6 +364,9 @@ class PropertiesPanel extends StatelessWidget {
       ),
     );
   }
+
+  /// The effect previews in the line's colour, unless it would vanish on the light menu.
+  Color get _previewColor => host.color.computeLuminance() > 0.7 ? Colors.black87 : host.color;
 
   /// Fonts installed on every Mac (others fall back to the system font).
   static const fonts = <(String, String)>[

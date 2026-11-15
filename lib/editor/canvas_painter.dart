@@ -161,6 +161,8 @@ class CanvasPainter extends CustomPainter {
       case ArrowShape() || LineShape():
         if (a.arrowStyle.snake) {
           drawSnake(canvas, a.curve!, a.arrowStyle, a.color, w, tangents: a.curveTangents);
+        } else if (a.arrowStyle.effect != ArrowEffect.none) {
+          drawEffect(canvas, a.curve!, a.arrowStyle, a.color, w, tangents: a.curveTangents);
         } else {
           drawArrow(canvas, a.curve!, a.arrowStyle, a.color, w, tangents: a.curveTangents);
         }
@@ -209,6 +211,8 @@ class CanvasPainter extends CustomPainter {
         if (pts != null) {
           if (a.arrowStyle.snake) {
             drawSnake(canvas, pts, a.arrowStyle, a.color, w);
+          } else if (a.arrowStyle.effect != ArrowEffect.none) {
+            drawEffect(canvas, pts, a.arrowStyle, a.color, w);
           } else {
             drawArrow(canvas, pts, a.arrowStyle, a.color, w);
           }
@@ -718,6 +722,249 @@ class CanvasPainter extends CustomPainter {
     }
   }
 
+  // ---- Arrow effects ----
+
+  /// One of the animated arrow effects ([ArrowEffect]) along the curve through `pts`, with the arrow's own heads (both
+  /// ends, any kind and size), colour and width; Colour flow and Fire trail keep their own colours. `phase` (0…1, one
+  /// loop; 1.2 draws as 0.2) moves it; null uses the current march (the editor's ticker / the GIF loop), as for the snake.
+  /// The body stops at the back of each head, as a marching body does, so nothing moves inside a head. Shadow, outline,
+  /// border, tapered and the pattern are not used. No layers: each blur is a mask filter on its own small shape.
+  static void drawEffect(Canvas canvas, List<Offset> pts, ArrowStyle style, Color color, double w,
+      {List<Offset?> tangents = const [], double? phase}) {
+    if (style.effect == ArrowEffect.none) return drawArrow(canvas, pts, style, color, w, tangents: tangents);
+    final a = pts.first, b = pts.last;
+    if (pts.length < 2 || ((b - a).distance <= 1 && pts.length == 2)) return;
+    final segs = spline(pts, tangents);
+    final (_, firstC1, _, _) = segs.first;
+    final (lastA, _, lastC2, _) = segs.last;
+    final towardEnd = (lastC2 - b).distance > 0.5 ? lastC2 : lastA;
+    final towardStart = (firstC1 - a).distance > 0.5 ? firstC1 : segs.first.$4;
+    final k = style.headSize.scale;
+    final start = _head(style.start, a, towardStart, w, k), end = _head(style.end, b, towardEnd, w, k);
+    // As drawArrow's marching body: from the back of each head (half a line earlier where the head is see-through)
+    var from = start.trim, to = end.trim;
+    double room(_Head h) => h.path == null ? 0 : h.back + (h.hollow ? w / 2 : 0);
+    if (room(start) + room(end) < (b - a).distance - w) {
+      from = a + _unit(a, towardStart) * room(start);
+      to = b + _unit(b, towardEnd) * room(end);
+    }
+    final line = _curvePath([from, ...pts.sublist(1, pts.length - 1), to], tangents);
+    final metrics = line.computeMetrics().iterator; // one pass only: PathMetrics cannot be walked twice
+    if (!metrics.moveNext() || metrics.current.length < 1) return;
+    final metric = metrics.current;
+    final fx = _Fx(line, metric, start, end, b, _unit(towardEnd, b));
+    // Rounded to a millionth, so a phase and the same phase one loop later give the very same frame
+    final t = (((phase ?? _marchNow) % 1) * 1e6).round() % 1000000 / 1e6;
+    switch (style.effect) {
+      case ArrowEffect.none:
+        break;
+      case ArrowEffect.neon:
+        _neon(canvas, fx, color, w, t);
+      case ArrowEffect.flow:
+        _flow(canvas, fx, w, t);
+      case ArrowEffect.electric:
+        _electric(canvas, fx, color, w, t);
+      case ArrowEffect.fire:
+        _fire(canvas, fx, w, t);
+      case ArrowEffect.pulse:
+        _pulse(canvas, fx, color, w, t);
+      case ArrowEffect.rope:
+        _rope(canvas, fx, color, w, t);
+    }
+  }
+
+  static Paint _blurred(Paint p, double sigma) => p..maskFilter = MaskFilter.blur(BlurStyle.normal, sigma);
+
+  /// A head as its kind draws it: filled, or stroked at its own width plus `grow`; blurred for a glow.
+  static void _effectHead(Canvas canvas, _Head h, Color c, {double grow = 0, double blur = 0}) {
+    final path = h.path;
+    if (path == null) return;
+    final p = h.filled ? _fill(c) : _stroke(c, h.lineWidth + grow);
+    canvas.drawPath(path, blur > 0 ? _blurred(p, blur) : p);
+  }
+
+  /// A thin line along a head: round a filled head's edge, down the middle of a stroked one.
+  static void _headLine(Canvas canvas, _Head h, Color c, double width) {
+    final path = h.path;
+    if (path == null) return;
+    canvas.drawPath(path, _stroke(c, h.filled ? width : math.min(width, h.lineWidth * 0.4)));
+  }
+
+  /// Neon: a glowing tube whose glow breathes, with a white-hot core.
+  static void _neon(Canvas canvas, _Fx a, Color col, double w, double t) {
+    final breathe = 0.5 + 0.5 * math.sin(t * 2 * math.pi);
+    final glow = col.withValues(alpha: 0.35 + 0.4 * breathe), blur = w * (1.2 + 0.6 * breathe);
+    canvas.drawPath(a.line, _blurred(_stroke(glow, w * (2.6 + breathe)), blur));
+    for (final h in a.heads) {
+      _effectHead(canvas, h, glow, grow: w * (1.6 + breathe), blur: blur);
+    }
+    canvas.drawPath(a.line, _stroke(col, w));
+    final core = Color.lerp(col, Colors.white, 0.8)!;
+    canvas.drawPath(a.line, _stroke(core, w * 0.36));
+    for (final h in a.heads) {
+      _effectHead(canvas, h, col);
+      _headLine(canvas, h, core, w * 0.3);
+    }
+  }
+
+  static const _rainbow = [Color(0xFFFF2D95), Color(0xFFFF8A00), Color(0xFFFFE600), Color(0xFF00D4FF), Color(0xFF7A5CFF), Color(0xFFFF2D95)];
+
+  /// Colour flow: a rainbow travelling toward the head (its own colours, not the line's).
+  static void _flow(Canvas canvas, _Fx a, double w, double t) {
+    Color at(double d) {
+      final x = ((d / 260 - t) % 1 + 1) % 1 * (_rainbow.length - 1);
+      final i = x.floor().clamp(0, _rainbow.length - 2);
+      return Color.lerp(_rainbow[i], _rainbow[i + 1], x - i)!;
+    }
+    canvas.drawPath(a.line, _blurred(_stroke(Colors.black.withValues(alpha: 0.25), w + 2), 2));
+    canvas.drawCircle(a.at(0), w / 2, _fill(at(0))); // round ends: the pieces are cut square
+    canvas.drawCircle(a.at(a.len), w / 2, _fill(at(a.len)));
+    // Short square-cut pieces, each in its colour; longer pieces on a wide or long line keep the count down
+    final step = math.max(math.max(2.0, w / 3), a.len / 300);
+    for (var d = 0.0; d < a.len; d += step) {
+      canvas.drawPath(a.part(d, d + step + 0.8), _stroke(at(d), w)..strokeCap = StrokeCap.butt);
+    }
+    _effectHead(canvas, a.start, at(0));
+    _effectHead(canvas, a.end, at(a.len));
+  }
+
+  /// A fixed pseudo-random number in -1…1 for (`seed`, `i`).
+  static double _noise(int seed, int i) => math.Random(seed * 7919 + i * 104729).nextDouble() * 2 - 1;
+
+  /// Electric: a crackling bolt around a steady core, sparks off the point. The bolt changes ten times a loop and is
+  /// the same for the same phase (seeded from the phase step).
+  static void _electric(Canvas canvas, _Fx a, Color col, double w, double t) {
+    canvas.drawPath(a.line, _blurred(_stroke(col.withValues(alpha: 0.5), w * 2.4), w));
+    canvas.drawPath(a.line, _stroke(col, w * 0.7));
+    final light = Color.lerp(col, Colors.white, 0.55)!;
+    for (final h in a.heads) {
+      _effectHead(canvas, h, col.withValues(alpha: 0.6), grow: w * 1.4, blur: w);
+      _effectHead(canvas, h, light);
+    }
+    final seed = (t * 10 + 1e-6).floor();
+    final count = math.max(2, (a.len / math.max(math.max(12.0, w * 1.8), a.len / 120)).round()), step = a.len / count;
+    for (var bolt = 0; bolt < 2; bolt++) {
+      final p = Path();
+      for (var i = 0; i <= count; i++) {
+        final d = i * step, ends = math.sin(math.pi * i / count); // pinned at both ends
+        final pt = a.at(d) + a.normal(d) * (_noise(seed + bolt * 31, i) * w * 2.2 * ends);
+        i == 0 ? p.moveTo(pt.dx, pt.dy) : p.lineTo(pt.dx, pt.dy);
+      }
+      canvas.drawPath(p, _blurred(_stroke(col.withValues(alpha: 0.7), w * 0.9), w * 0.5));
+      canvas.drawPath(p, _stroke(Colors.white, w * (bolt == 0 ? 0.32 : 0.2)));
+    }
+    // Sparks off the front of the end head (a dot, circle, square or diamond is centred on the line's end, so further on)
+    var reach = 0.0;
+    if (a.end.path case final head?) {
+      for (final m in head.computeMetrics()) {
+        for (var i = 0; i < 24; i++) {
+          final p = m.getTangentForOffset(m.length * i / 24)!.position - a.tip;
+          reach = math.max(reach, p.dx * a.dir.dx + p.dy * a.dir.dy);
+        }
+      }
+      if (!a.end.filled) reach += a.end.lineWidth / 2;
+    }
+    final point = a.tip + a.dir * reach, r = math.Random(seed);
+    for (var i = 0; i < 4; i++) {
+      final ang = math.atan2(a.dir.dy, a.dir.dx) + (r.nextDouble() - 0.5) * 2.2;
+      final v = Offset(math.cos(ang), math.sin(ang));
+      final from = point + v * (w * 0.8), to = from + v * (w * (1 + r.nextDouble() * 2.5));
+      canvas.drawLine(from, to, _stroke(Colors.white, w * 0.22));
+      canvas.drawLine(from, to, _blurred(_stroke(col.withValues(alpha: 0.6), w * 0.6), 2));
+    }
+  }
+
+  /// Fire trail: the head burns and a flame with embers trails back along the line (its own fire colours).
+  static void _fire(Canvas canvas, _Fx a, double w, double t) {
+    const dark = Color(0xFFB3140A), mid = Color(0xFFFF6A00), hot = Color(0xFFFFD21F), white = Color(0xFFFFF6C8);
+    Color heat(double f) => f < 0.5 ? Color.lerp(dark, mid, f * 2)! : Color.lerp(mid, hot, (f - 0.5) * 2)!;
+    final s = math.max(1.0, w / 9); // the flicker and the embers were sized for a 9-point line
+    final step = math.max(math.max(2.5, w * 0.55), a.len / 250); // blobs overlap at any width, never too many
+    for (var d = 0.0; d < a.len; d += step) {
+      final f = d / a.len; // 0 tail … 1 head
+      final wob = math.sin(d / (17 * s) - t * 2 * math.pi * 2) * 0.6 + math.sin(d / (7.3 * s) + t * 2 * math.pi * 3) * 0.4;
+      final r = w * (0.22 + 0.75 * f) * (1 + 0.18 * wob);
+      final p = a.at(d) + a.normal(d) * (wob * w * 0.35 * f);
+      canvas.drawCircle(p, r * 1.5, _blurred(_fill(heat(f).withValues(alpha: 0.10 + 0.25 * f)), r * 0.9));
+      canvas.drawCircle(p, r, _fill(heat(f).withValues(alpha: 0.55 + 0.45 * f)));
+    }
+    for (var d = a.len * 0.35; d < a.len; d += step) { // the hot core near the head
+      final f = (d / a.len - 0.35) / 0.65;
+      canvas.drawCircle(a.at(d), w * 0.3 * f, _fill(white.withValues(alpha: 0.85 * f)));
+    }
+    for (var i = 0; i < 14; i++) { // embers drifting back and up
+      final life = (t + i / 14) % 1;
+      final d = a.len * (1 - life * 0.75) - (i % 3) * 14 * s;
+      final side = (i.isEven ? 1 : -1) * (0.6 + (i % 5) * 0.35);
+      final p = a.at(d) + a.normal(d) * (side * w * (0.8 + life * 1.6)) + Offset(0, -life * w * 1.2);
+      canvas.drawCircle(p, w * 0.16 * (1 - life) + 0.6, _fill(Color.lerp(hot, dark, life)!.withValues(alpha: 1 - life)));
+    }
+    _effectHead(canvas, a.start, heat(0.15)); // the tail end smoulders
+    _effectHead(canvas, a.end, mid.withValues(alpha: 0.7), grow: w, blur: w * 1.1);
+    _effectHead(canvas, a.end, hot);
+    _headLine(canvas, a.end, white, w * 0.25);
+  }
+
+  /// Pulse: a bright comet runs tail to head and pops at the point. Shifted so phase 0 (a still picture) shows the
+  /// comet part-way along.
+  static void _pulse(Canvas canvas, _Fx a, Color col, double w, double phase) {
+    final t = (phase + 0.45) % 1, s = math.max(1.0, w / 9);
+    canvas.drawPath(a.line, _blurred(_stroke(Colors.black.withValues(alpha: 0.25), w + 2), 2));
+    canvas.drawPath(a.line, _stroke(col, w));
+    final run = (t / 0.7).clamp(0.0, 1.0), pop = ((t - 0.62) / 0.38).clamp(0.0, 1.0);
+    final glowHead = pop > 0 ? (1 - pop) : 0.0;
+    if (t < 0.7) {
+      final at = Curves.easeIn.transform(run) * (a.len + 30 * s), band = 70.0 * s;
+      final bright = Color.lerp(col, Colors.white, 0.75)!;
+      for (var i = 0; i < 8; i++) { // a comet: bright front, fading tail
+        final f = i / 8;
+        canvas.drawPath(a.part(at - band * (1 - f), at), _stroke(bright.withValues(alpha: 0.16 + 0.1 * f), w * (1.0 + 0.5 * f)));
+      }
+      canvas.drawPath(a.part(at - 14 * s, at), _blurred(_stroke(col.withValues(alpha: 0.8), w * 2.6), w * 0.9));
+      canvas.drawPath(a.part(at - 10 * s, at), _stroke(Colors.white, w * 0.9));
+    }
+    _effectHead(canvas, a.start, col);
+    _effectHead(canvas, a.end, Color.lerp(col, Colors.white, 0.7 * glowHead)!);
+    if (pop > 0 && pop < 1) {
+      final centre = a.end.path?.getBounds().center ?? a.tip, e = Curves.easeOut.transform(pop);
+      _effectHead(canvas, a.end, col.withValues(alpha: 0.7 * (1 - pop)), grow: w, blur: w * 1.4);
+      canvas.drawCircle(centre, w * (2 + 6.5 * e), _stroke(col.withValues(alpha: 0.9 * (1 - pop)), w * 0.55 * (1 - pop) + 0.8));
+      canvas.drawCircle(centre, w * (1 + 4 * e), _stroke(Colors.white.withValues(alpha: 0.7 * (1 - pop)), w * 0.3 * (1 - pop) + 0.5));
+    }
+  }
+
+  /// Rope: a twisted cord crawling toward the head, one strand per loop.
+  static void _rope(Canvas canvas, _Fx a, Color col, double w, double t) {
+    final hsl = HSLColor.fromColor(col);
+    final dark = hsl.withLightness((hsl.lightness * 0.45).clamp(0.0, 1.0)).toColor();
+    final light = hsl.withLightness((hsl.lightness + (1 - hsl.lightness) * 0.5).clamp(0.0, 1.0)).toColor();
+    final rw = w * 1.35;
+    canvas.drawPath(a.line, _blurred(_stroke(Colors.black.withValues(alpha: 0.3), rw + 3), 2.5));
+    canvas.drawPath(a.line, _stroke(dark, rw + 2));
+    canvas.drawPath(a.line, _stroke(col, rw));
+    // The strands: slanted strokes clipped to the cord (a clip, not a layer)
+    final left = <Offset>[], right = <Offset>[];
+    final step = math.max(2.0, a.len / 400);
+    for (var d = 0.0; d <= a.len + step / 2; d += step) {
+      left.add(a.at(d) + a.normal(d) * (rw / 2));
+      right.add(a.at(d) - a.normal(d) * (rw / 2));
+    }
+    canvas.save();
+    canvas.clipPath(Path()..addPolygon([...left, ...right.reversed], true));
+    final pitch = rw * 1.25, q = pitch * 0.42;
+    Offset edge(double d, double side) => a.at(d) + a.normal(d) * (side * rw * 0.7);
+    for (var d = -pitch + t * pitch; d < a.len + pitch; d += pitch) {
+      canvas.drawLine(edge(d - rw * 0.55, 1), edge(d + rw * 0.55, -1), _stroke(dark, rw * 0.3));
+      canvas.drawLine(edge(d - rw * 0.55 + q, 1), edge(d + rw * 0.55 + q, -1), _stroke(light.withValues(alpha: 0.75), rw * 0.2));
+    }
+    canvas.restore();
+    for (final h in a.heads) {
+      _effectHead(canvas, h, dark, grow: 2);
+      if (h.filled) _headLine(canvas, h, dark, 2);
+      _effectHead(canvas, h, col);
+    }
+  }
+
   // ---- Other shapes ----
 
   static Path _smooth(List<Offset> points) {
@@ -1089,6 +1336,24 @@ class _Head {
   const _Head(this.path, {this.filled = true, this.lineWidth = 0, required this.trim, this.back = 0, this.hollow = false});
 }
 
+/// An effect's line (ending at the back of each head) with its heads, and lookups along it by distance.
+class _Fx {
+  final Path line;
+  final ui.PathMetric m;
+  final _Head start, end;
+  final Offset tip, dir; // the end's point and the direction the line arrives in
+  _Fx(this.line, this.m, this.start, this.end, this.tip, this.dir);
+  List<_Head> get heads => [start, end];
+  double get len => m.length;
+  ui.Tangent _tangent(double d) => m.getTangentForOffset(d.clamp(0.0, len))!;
+  Offset at(double d) => _tangent(d).position;
+  Offset normal(double d) {
+    final v = _tangent(d).vector;
+    return Offset(-v.dy, v.dx);
+  }
+  Path part(double a, double b) => m.extractPath(a.clamp(0.0, len), b.clamp(0.0, len));
+}
+
 /// A small preview of a line style (for the Arrowheads / Pattern menus).
 class StylePreview extends StatelessWidget {
   final ArrowStyle style;
@@ -1111,7 +1376,7 @@ class _PreviewStyle extends CustomPainter {
     final plain = style.copyWith(shadow: false, outline: false);
     final y = size.height / 2;
     if (line) {
-      CanvasPainter.drawArrow(canvas, [Offset(7, y), Offset(size.width - 7, y)], plain, color, 2);
+      CanvasPainter.drawEffect(canvas, [Offset(7, y), Offset(size.width - 7, y)], plain, color, 2, phase: 0); // plain without an effect
     } else {
       CanvasPainter.strokeStyled(canvas, Path()..addRRect(RRect.fromRectXY(Rect.fromLTWH(4, 3, size.width - 8, size.height - 6), 2, 2)),
           plain, color, 1.5);

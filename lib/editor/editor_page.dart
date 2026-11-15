@@ -2917,7 +2917,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                           painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY, clearBase: widget.overlay, fade: _fadeOut, flyFrom: _flyFrom, flyTo: _flyTo,
                               hiddenTextId: _textEdit?.id, march: _march, epicycles: _playId != null && BuildUpGif.fourier,
                               envelope: _playId != null && BuildUpGif.envelope,
-                              animate: state.annotations.any((a) => a.styleKind != null && a.arrowStyle.pattern.marches),
+                              animate: state.annotations.any((a) => a.styleKind != null &&
+                                  (a.arrowStyle.pattern.marches || a.arrowStyle.effect != ArrowEffect.none)),
                               progress: _playId == null ? null : {for (final a in state.annotations) a.id: a.id == _playId ? _playT : 1.0}),
                         ))),
                       ),
