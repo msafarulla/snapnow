@@ -7,7 +7,7 @@ import QuartzCore
 /// (MatrixColumns, a port of cmatrix): every second column, a white head, a green tail, 40 ms a frame, over a light black
 /// wash so the screen stays visible. One borderless, click-through window per display above everything (screen-saver
 /// level, every Space and over full-screen apps), never in a capture (sharingType none) but in a screen recording, never taking
-/// focus. Each cell is a layer showing a cached glyph image, and a frame only touches the cells that changed. Off while
+/// focus. A virtual display is the exception: its window is always capturable (see VirtualDisplay), so the rain is in a capture of it. Each cell is a layer showing a cached glyph image, and a frame only touches the cells that changed. Off while
 /// the screen is locked or asleep; rebuilt when displays change; never together with draw mode (opening draw mode stops
 /// it, and it does not start while draw mode is up).
 final class MatrixRain {
@@ -25,6 +25,22 @@ final class MatrixRain {
     var monitorShortcut: Shortcut?
     /// Out of captures and screenshots, but in a screen recording while one runs (it is part of what you see).
     static var sharing: NSWindow.SharingType { Recorder.shared.isRecording ? .readOnly : .none }
+    /// The sharing type of the rain window on one display. A virtual display has no panel: its picture exists only by
+    /// being captured (by whatever app streams it to a real screen), so a window left out of captures would never be
+    /// seen there. Its rain window is therefore always capturable. Accepted consequence: a SnapNow capture or a
+    /// screenshot of a virtual display includes the rain while it runs. Physical displays: `sharing`, as before.
+    static func sharing(virtual: Bool) -> NSWindow.SharingType { virtual ? .readOnly : sharing }
+    /// Test control status.json "matrixScreens": each rain window's display, whether it is virtual, the sharing type set
+    /// on the window and the one the window server reports for it.
+    var screenStatus: [[String: Any]] {
+        func name(_ t: NSWindow.SharingType) -> String { t == .none ? "none" : t == .readOnly ? "readOnly" : "other(\(t.rawValue))" }
+        return screens.map { s in
+            let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(s.window.windowNumber)) as? [[String: Any]])?.first
+            let server = (info?[kCGWindowSharingState as String] as? UInt).flatMap { NSWindow.SharingType(rawValue: $0) }
+            return ["display": s.displayName, "virtual": s.virtual, "sharing": name(s.window.sharingType),
+                    "serverSharing": server.map(name) ?? "unknown"]
+        }
+    }
     static let washAlpha: CGFloat = 0.5            // "background can slightly become black" (as the browser rain)
 
     /// Global and local key monitors (the same Accessibility / Input Monitoring permissions as draw mode's double-tap).
@@ -47,7 +63,7 @@ final class MatrixRain {
             self.buildScreens()
         }
         on(NotificationCenter.default, Recorder.recordingChanged) { [weak self] in
-            self?.screens.forEach { $0.window.sharingType = MatrixRain.sharing }
+            self?.screens.forEach { $0.window.sharingType = MatrixRain.sharing(virtual: $0.virtual) }
         }
     }
 
@@ -158,9 +174,32 @@ final class MatrixRain {
     }
 }
 
+/// Tells a virtual display (made by software, no panel: seen only through an app that captures and streams it) from a
+/// physical one. There is no public API for this, so the display's info dictionary is read through a CoreDisplay
+/// function looked up at run time (no link-time dependency): when the function or the flag is missing the display
+/// counts as physical, which is the behaviour before this existed. A built-in display is never virtual.
+enum VirtualDisplay {
+    private typealias InfoFunction = @convention(c) (CGDirectDisplayID) -> Unmanaged<CFDictionary>?
+    private static let info: InfoFunction? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CoreDisplay_DisplayCreateInfoDictionary") else { return nil }   // RTLD_DEFAULT
+        return unsafeBitCast(symbol, to: InfoFunction.self)
+    }()
+
+    static func isVirtual(_ id: CGDirectDisplayID) -> Bool {
+        guard id != 0, CGDisplayIsBuiltin(id) == 0, let dict = info?(id)?.takeRetainedValue() as? [String: Any] else { return false }
+        return (dict["kCGDisplayIsVirtualDevice"] as? NSNumber)?.boolValue ?? false
+    }
+
+    static func isVirtual(_ screen: NSScreen) -> Bool {
+        isVirtual((screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
+    }
+}
+
 /// One display's rain: its window, its columns and a layer per used cell.
 private final class RainScreen {
     let window: NSWindow
+    let virtual: Bool                      // a virtual display: the window stays capturable (MatrixRain.sharing(virtual:))
+    let displayName: String
     private var engine: MatrixColumns
     private let glyphs: RainGlyphs
     private var cells: [CALayer] = []      // row-major: rows 0..<lines, used (even) columns only
@@ -169,6 +208,8 @@ private final class RainScreen {
 
     init(screen: NSScreen) {
         glyphs = RainGlyphs.shared(scale: screen.backingScaleFactor)
+        virtual = VirtualDisplay.isVirtual(screen)
+        displayName = screen.localizedName
         let size = screen.frame.size, cw = glyphs.cell.width, ch = glyphs.cell.height
         let cols = max(1, Int(size.width / cw)), lines = max(1, Int(size.height / ch))
         engine = MatrixColumns(lines: lines, cols: cols)
@@ -182,7 +223,8 @@ private final class RainScreen {
         w.ignoresMouseEvents = true                 // every click and scroll goes to the apps underneath
         w.level = .screenSaver                      // above normal windows, the menu bar, the Dock and full-screen apps
         w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        w.sharingType = MatrixRain.sharing          // never in a SnapNow capture or a screenshot; in a screen recording, yes
+        // never in a SnapNow capture or a screenshot; in a screen recording, yes; on a virtual display always capturable
+        w.sharingType = MatrixRain.sharing(virtual: virtual)
         w.animationBehavior = .none
         let view = NSView(frame: NSRect(origin: .zero, size: size))
         view.wantsLayer = true

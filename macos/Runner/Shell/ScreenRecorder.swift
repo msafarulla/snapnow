@@ -973,7 +973,7 @@ private final class BorderView: NSView {
 ///   "matrix" (the rain on/off), "icon" (a left click on the menu
 ///   bar icon), "region" ("x","y","w","h": a region capture of that area without the picker), "screen" (Capture Full
 ///   Screen), "scroll" ("x","y","w","h": a scrolling capture of that area), "status" (writes status.json next to the
-///   command file: recording, draw mode, rain, panel, editor window, Dock or menu bar app, front app, newest capture).
+///   command file: recording, draw mode, rain and each rain window's sharing type, panel, editor window, Dock or menu bar app, front app, newest capture).
 /// Any command may also carry "drawClose" (fade, fly, off) and "drawCloseSpeed" (fast, normal, relaxed, slow): set as in
 /// Settings › Draw mode before the action runs.
 /// Areas are in points from the bottom-left of the main display. "synthetic" feeds generated pictures instead of the
@@ -1075,6 +1075,7 @@ enum RecorderTestControl {
         status["colorPanel"] = LiveDraw.shared.colorPanelStatus
         status["lastDrawClose"] = LiveDraw.shared.lastClose ?? NSNull()
         status["matrixRain"] = MatrixRain.shared.running
+        status["matrixScreens"] = MatrixRain.shared.screenStatus
         let editor = NSApp.windows.first { $0 is MainFlutterWindow }
         status["editorVisible"] = editor?.isVisible ?? false
         status["editorParked"] = DockPresence.shared.parked
