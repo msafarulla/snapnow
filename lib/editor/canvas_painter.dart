@@ -634,7 +634,16 @@ class CanvasPainter extends CustomPainter {
       }
     }
     final body = [from, ...pts.sublist(1, pts.length - 1), to];
-    final centerline = _curvePath(body, tangents);
+    var centerline = _curvePath(body, tangents);
+    if (!style.pattern.marches && !style.tapered) {
+      // A plain body is the drawn curve itself, cut by length at the trims: re-fitting the spline to the trimmed ends with
+      // the curve's own end tangents made a short or sharply bent arrow wobble (or hook) just behind its head
+      final full = _curvePath(pts, tangents).computeMetrics().iterator;
+      if (full.moveNext()) {
+        final whole = full.current, s0 = (a - start.trim).distance, s1 = (b - end.trim).distance;
+        if (s0 + s1 < whole.length - 1) centerline = whole.extractPath(s0, whole.length - s1);
+      }
+    }
     final wedge = style.tapered ? _taperedBody(body, tangents, endWidth) : null;
 
     _styled(canvas, style, color, math.max(1.5, w * 0.35), (paint, extra) {
@@ -741,15 +750,18 @@ class CanvasPainter extends CustomPainter {
     final towardStart = (firstC1 - a).distance > 0.5 ? firstC1 : segs.first.$4;
     final k = style.headSize.scale;
     final start = _head(style.start, a, towardStart, w, k), end = _head(style.end, b, towardEnd, w, k);
-    // As drawArrow's marching body: from the back of each head (half a line earlier where the head is see-through)
-    var from = start.trim, to = end.trim;
-    double room(_Head h) => h.path == null ? 0 : h.back + (h.hollow ? w / 2 : 0);
-    if (room(start) + room(end) < (b - a).distance - w) {
-      from = a + _unit(a, towardStart) * room(start);
-      to = b + _unit(b, towardEnd) * room(end);
-    }
-    final line = _curvePath([from, ...pts.sublist(1, pts.length - 1), to], tangents);
-    final metrics = line.computeMetrics().iterator; // one pass only: PathMetrics cannot be walked twice
+    // The line is the arrow's own curve, cut by length: under a filled head (a swept head's notch included) it stops where
+    // the plain arrow's body does, so it meets the head with no gap; a see-through head (outlined triangle, circle, open
+    // chevron) keeps the line out of it, half a line short of its back. Cutting the drawn curve, rather than re-fitting the
+    // spline to moved end points, keeps its shape and the direction it arrives in on a short or sharply bent arrow.
+    final full = _curvePath(pts, tangents).computeMetrics().iterator; // one pass only: PathMetrics cannot be walked twice
+    if (!full.moveNext() || full.current.length < 1) return;
+    final whole = full.current;
+    double cut(_Head h, Offset tip) => h.path == null ? 0 : h.filled ? (tip - h.trim).distance : h.back + (h.hollow ? w / 2 : 0);
+    var s0 = cut(start, a), s1 = cut(end, b);
+    if (s0 + s1 > whole.length - 1) s0 = s1 = 0; // too short for both heads: the whole curve, under them
+    final line = whole.extractPath(s0, whole.length - s1);
+    final metrics = line.computeMetrics().iterator;
     if (!metrics.moveNext() || metrics.current.length < 1) return;
     final metric = metrics.current;
     final fx = _Fx(line, metric, start, end, b, _unit(towardEnd, b));

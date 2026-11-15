@@ -112,4 +112,35 @@ void main() {
       expect(BuildUpGif.marches(CanvasState(image: base, annotations: [styled])), isTrue);
     }
   });
+
+  test('a short, sharply bent arrow: the line follows the drawn curve into the head, effect or not', () async {
+    // As draw mode fits a quick hook: explicit end tangents much longer than what is left behind the head
+    const shape = ArrowShape(Offset(40, 160), Offset(150, 70), tangents: [Offset(150, 0), Offset(30, -150)]);
+    // Clearly painted (not just an effect's faint dark shadow or an antialiased fringe)
+    bool painted(int a, int b) => [0, 8, 16].any((sh) => (((a >> sh) & 255) - ((b >> sh) & 255)).abs() > 60);
+    final curve = CanvasPainter.curveSamples([shape.from, shape.to], tangents: shape.tangents, perSegment: 200);
+    for (final e in [ArrowEffect.none, ArrowEffect.flow]) {
+      final a = Annotation(id: 3, color: Colors.cyan, size: StrokeSize.medium,
+          arrowStyle: ArrowStyle(end: ArrowHead.swept, shadow: false, effect: e), shape: shape);
+      final px = await paint((c) => CanvasPainter.drawAnnotation(c, a));
+      final bg = await paint((c) {});
+      var off = 0, gap = 0;
+      for (var i = 0; i < px.length; i++) {
+        if (!painted(px[i], bg[i])) continue;
+        final p = Offset((i % 400).toDouble(), (i ~/ 400).toDouble());
+        if ((p - shape.to).distance < 34) continue; // the head
+        final near = curve.map((q) => (q - p).distance).reduce((x, y) => x < y ? x : y);
+        if (near > a.lineWidth / 2 + 4) off++;
+      }
+      // No gap: every point of the curve from 30 to 18 px before the tip is painted
+      for (final q in curve) {
+        final d = (q - shape.to).distance;
+        if (d < 18 || d > 30) continue;
+        final i = q.dy.round() * 400 + q.dx.round();
+        if (!painted(px[i], bg[i])) gap++;
+      }
+      expect(off, lessThan(20), reason: '${e.label}: the line strays from the drawn curve');
+      expect(gap, 0, reason: '${e.label}: a gap between the line and the head');
+    }
+  });
 }
