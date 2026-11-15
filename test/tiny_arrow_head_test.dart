@@ -33,7 +33,7 @@ void main() {
     test('${e.label}: a tiny curled arrow keeps a small head pointing along the end of the stroke', () async {
       final headed = await paint(ArrowStyle(end: ArrowHead.swept, shadow: false, effect: e));
       final bare = await paint(ArrowStyle(end: ArrowHead.none, shadow: false, effect: e));
-      // Where the head is: its wings, i.e. what it covers clear of the line (more than half a line plus 2 px off the curve)
+      // Where the head is: its wings, i.e. what it covers clear of the line (the line thins to 5 px here: more than 4 px off the curve)
       final bg = headed[0];
       // Clearly painted, not the faint, slightly shifting edge of an effect's blurred shadow
       bool painted(int a, int b) => [0, 8, 16].any((sh) => (((a >> sh) & 255) - ((b >> sh) & 255)).abs() > 40);
@@ -42,7 +42,7 @@ void main() {
       for (var i = 0; i < headed.length; i++) {
         if (!painted(headed[i], bg) || painted(bare[i], bg)) continue;
         final p = Offset((i % 400).toDouble(), (i ~/ 400).toDouble());
-        if (curve.any((q) => (q - p).distance <= 7)) continue;
+        if (curve.any((q) => (q - p).distance <= 4)) continue;
         minX = math.min(minX, p.dx); maxX = math.max(maxX, p.dx); minY = math.min(minY, p.dy); maxY = math.max(maxY, p.dy);
         sum += p;
         n++;

@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart' show ValueListenable, visibleForTesting;
 import 'package:flutter/material.dart';
 import '../export/epicycles.dart';
 import '../model/annotation.dart';
@@ -594,39 +594,130 @@ class CanvasPainter extends CustomPainter {
   }
 
   /// How the heads sit on an arrow shorter than four head lengths (`headLength`, the full-size triangle/swept length), as
-  /// a tiny freehand arrow is: the head shrinks smoothly so it is never longer than a third of the arrow (`size`, a factor on
-  /// the head size), and it points more and more along the stroke's chord over its last head length rather than the
-  /// curve's own end direction, which on a tight curl twists it against the line (`blend` 0…1). A normal arrow gets
-  /// size 1, blend 0 and its own directions back, so it draws exactly as before.
-  /// With a thick line (`w`) a third of a very short arrow would be no wider than the line, so the head keeps at least two
-  /// line widths of length while that is under half the arrow.
-  static ({double size, double blend, double reach, Offset towardStart, Offset towardEnd, ui.PathMetric? curve}) _shortArrow(
-      List<Offset> pts, List<Offset?> tangents, Offset towardStart, Offset towardEnd, double headLength, double w) {
-    final it = _curvePath(pts, tangents).computeMetrics().iterator;
+  /// a tiny freehand arrow is. The line thins smoothly (`thin`, down to half) and the head shrinks (`size`, a factor on the
+  /// head size, same proportions): to a quarter of the path, a third of the larger side of the stroke's box and the normal
+  /// length, whichever is least, but not under 2.2 thinned line widths, so it still reads as a head; then smaller still
+  /// while it would lie over the tail (the line farther back than 1.5 head lengths), as on a tight curl. It points more and
+  /// more along the stroke's chord over its last head length rather than the curve's own end direction, which on a tight
+  /// curl twists it against the line (`blend` 0…1). Between three and four head lengths all of this eases back to normal;
+  /// a normal arrow gets size 1, thin 1, blend 0 and its own directions, so it draws exactly as before.
+  static _Short _shortArrow(List<Offset> pts, List<Offset?> tangents, Offset towardStart, Offset towardEnd, double headLength,
+      double w, {ArrowHead start = ArrowHead.none, ArrowHead end = ArrowHead.none, double k = 1, double? headW}) {
+    final curve = _curvePath(pts, tangents);
+    final it = curve.computeMetrics().iterator;
     final total = it.moveNext() ? it.current.length : 0.0;
     final blend = total <= 0 ? 0.0 : ((4 * headLength - total) / headLength).clamp(0.0, 1.0);
-    if (blend == 0) return (size: 1, blend: 0, reach: headLength, towardStart: towardStart, towardEnd: towardEnd, curve: null);
-    final m = it.current, size = math.min(1.0, math.max(total / 3, math.min(2 * w, total / 2)) / headLength);
-    final reach = headLength * size;
+    if (blend == 0) {
+      return (size: 1, blend: 0, thin: 1, reach: headLength, towardStart: towardStart, towardEnd: towardEnd, curve: null);
+    }
+    final m = it.current, thin = 1 - 0.5 * blend, lw = w * thin;
+    final box = curve.getBounds(), side = math.max(box.width, box.height);
+    final target = math.min(math.max(math.min(headLength, math.min(0.25 * total, 0.33 * side)), 2.2 * lw), total / 2);
+    var size = 1 - blend * (1 - math.min(1.0, target / headLength));
     Offset toward(Offset tip, Offset own, double at) {
       final chord = _unit(m.getTangentForOffset(at.clamp(0.0, total))!.position, tip), tangent = _unit(own, tip);
       final d = tangent * (1 - blend) + chord * blend;
       return tip - (d.distance < 1e-6 ? chord : d / d.distance) * 10;
     }
-    return (size: size, blend: blend, reach: reach, towardStart: toward(pts.first, towardStart, reach),
-        towardEnd: toward(pts.last, towardEnd, total - reach), curve: m);
+    var ts = towardStart, te = towardEnd;
+    for (var tries = 0; tries < 16; tries++) {
+      final reach = headLength * size;
+      ts = toward(pts.first, towardStart, reach);
+      te = toward(pts.last, towardEnd, total - reach);
+      if (!_overTail(m, lw, reach, _head(start, pts.first, ts, headW ?? w, k * size), true) &&
+          !_overTail(m, lw, reach, _head(end, pts.last, te, headW ?? w, k * size), false)) {
+        break;
+      }
+      size *= 0.85;
+    }
+    return (size: size, blend: blend, thin: thin, reach: headLength * size, towardStart: ts, towardEnd: te, curve: m);
   }
 
-  /// The body of a short arrow: the drawn curve up to a head length from each head, then straight along that head's axis
-  /// to where the body stops (`s0` / `s1` from the tips `a` / `b`), so the line enters the head on its axis.
-  static Path _shortBody(({double size, double blend, double reach, Offset towardStart, Offset towardEnd, ui.PathMetric? curve}) short,
-      _Head start, _Head end, double s0, double s1, Offset a, Offset b) {
-    final m = short.curve!;
-    final from = a + _unit(a, short.towardStart) * s0, to = b + _unit(b, short.towardEnd) * s1;
-    final q0 = start.path == null ? s0 : math.max(s0, short.reach), q1 = end.path == null ? s1 : math.max(s1, short.reach);
-    final path = Path()..moveTo(from.dx, from.dy);
-    if (q0 + q1 < m.length - 1) path.extendWithPath(m.extractPath(q0, m.length - q1), Offset.zero);
-    return path..lineTo(to.dx, to.dy);
+  /// Whether a head (at the start or the end of the curve `m`) covers the line farther than 1.5 head lengths (`reach`) back
+  /// along it: the line's centre or either edge (`lw` wide) inside the head's outline.
+  static bool _overTail(ui.PathMetric m, double lw, double reach, _Head h, bool atStart) {
+    final path = h.path;
+    if (path == null) return false;
+    final from = atStart ? 1.5 * reach : 0.0, to = atStart ? m.length : m.length - 1.5 * reach;
+    for (var d = from; d <= to; d += 1) {
+      final t = m.getTangentForOffset(d)!, n = Offset(-t.vector.dy, t.vector.dx) * (lw / 2);
+      if (path.contains(t.position) || path.contains(t.position + n) || path.contains(t.position - n)) return true;
+    }
+    return false;
+  }
+
+  /// How far behind its tip a head takes the line in: the middle of its back (a swept head's notch), or, for a see-through
+  /// head, half a line short of its back so the line's round end just reaches it.
+  static double _entry(_Head h, double w) =>
+      h.path == null ? 0 : h.filled && h.hollow ? h.back * 7 / 11 : h.back + (h.hollow ? w / 2 : 0);
+
+  /// The body of a short arrow as one smooth stroke into each head: the drawn curve, whose last stretch before a head (its
+  /// entry plus 0.4 of the shrunk head length, about one head length) is replaced by a cubic that leaves the curve in the curve's own direction and arrives at the middle of the head's back
+  /// (`e0` / `e1` behind the tips `a` / `b`) travelling along the head's axis. No corner, no straight stub, no step.
+  static Path _shortBody(_Short short, _Head start, _Head end, double e0, double e1, Offset a, Offset b) {
+    final m = short.curve!, total = m.length;
+    final out0 = _unit(short.towardStart, a), out1 = _unit(short.towardEnd, b); // the way each head points
+    final q0 = start.path == null ? a : a - out0 * e0, q1 = end.path == null ? b : b - out1 * e1;
+    final b0 = start.path == null ? 0.0 : e0 + 0.4 * short.reach, b1 = end.path == null ? 0.0 : e1 + 0.4 * short.reach;
+    // Handles from a third of the gap (going straight on) to two thirds (a U-turn), as for a circular arc, so a stroke
+    // that turns back into its head rounds the turn instead of folding it into a corner
+    double handle(Offset from, Offset to, Offset v0, Offset v1) {
+      final turn = math.acos((v0.dx * v1.dx + v0.dy * v1.dy).clamp(-1.0, 1.0));
+      return (to - from).distance * (1 + turn / math.pi) / 3;
+    }
+    final path = Path()..moveTo(q0.dx, q0.dy);
+    if (b0 + b1 >= total - 1) {
+      // No stretch of the drawn curve left between the two blends: one cubic from end to end
+      final v0 = start.path == null ? m.getTangentForOffset(0)!.vector : -out0;
+      final v1 = end.path == null ? m.getTangentForOffset(total)!.vector : out1;
+      final h = handle(q0, q1, v0, v1), c1 = q0 + v0 * h, c2 = q1 - v1 * h;
+      return path..cubicTo(c1.dx, c1.dy, c2.dx, c2.dy, q1.dx, q1.dy);
+    }
+    if (start.path != null) {
+      final t = m.getTangentForOffset(b0)!, p = t.position, h = handle(q0, p, -out0, t.vector);
+      final c1 = q0 - out0 * h, c2 = p - t.vector * h;
+      path.cubicTo(c1.dx, c1.dy, c2.dx, c2.dy, p.dx, p.dy);
+    }
+    path.extendWithPath(m.extractPath(b0, total - b1), Offset.zero);
+    if (end.path != null) {
+      final t = m.getTangentForOffset(total - b1)!, p = t.position, h = handle(p, q1, t.vector, out1);
+      final c1 = p + t.vector * h, c2 = q1 - out1 * h;
+      path.cubicTo(c1.dx, c1.dy, c2.dx, c2.dy, q1.dx, q1.dy);
+    }
+    return path;
+  }
+
+  /// A plain body (solid or still dashes, not tapered): the drawn curve cut by length at the trims (re-fitting the spline to
+  /// the trimmed ends with the curve's own end tangents made a short or sharply bent arrow wobble or hook behind its head),
+  /// or on a short arrow the smooth stroke of [_shortBody]. Null: too short, keep the spline through the trims.
+  static Path? _plainBody(List<Offset> pts, List<Offset?> tangents, _Short short, _Head start, _Head end, double w) {
+    final a = pts.first, b = pts.last;
+    if (short.blend > 0) return _shortBody(short, start, end, _entry(start, w), _entry(end, w), a, b);
+    final full = _curvePath(pts, tangents).computeMetrics().iterator;
+    if (!full.moveNext()) return null;
+    final whole = full.current, s0 = (a - start.trim).distance, s1 = (b - end.trim).distance;
+    return s0 + s1 < whole.length - 1 ? whole.extractPath(s0, whole.length - s1) : null;
+  }
+
+  /// For tests: a plain arrow's line (as drawn) and drawn curve, its end head (outline, tip, pointing direction, length and
+  /// how far behind the tip it takes the line in: the middle of its back), where the line leaves the drawn curve (distance
+  /// from the tip along it; 0 on a normal arrow) and the line's width, computed exactly as [drawArrow] does.
+  @visibleForTesting
+  static ({Path line, Path curve, Path? head, Offset tip, Offset axis, double entry, double headLength, double blendFrom,
+      double lineWidth}) endJoin(List<Offset> pts, ArrowStyle style, double w, {List<Offset?> tangents = const []}) {
+    final a = pts.first, b = pts.last;
+    final segs = spline(pts, tangents);
+    final (_, firstC1, _, _) = segs.first;
+    final (lastA, _, lastC2, _) = segs.last;
+    final full = math.max(14.0, w * 5) * style.headSize.scale;
+    final short = _shortArrow(pts, tangents, (firstC1 - a).distance > 0.5 ? firstC1 : segs.first.$4,
+        (lastC2 - b).distance > 0.5 ? lastC2 : lastA, full, w, start: style.start, end: style.end, k: style.headSize.scale);
+    final k = style.headSize.scale * short.size;
+    final start = _head(style.start, a, short.towardStart, w, k), end = _head(style.end, b, short.towardEnd, w, k);
+    final lw = w * short.thin, entry = _entry(end, lw);
+    final line = _plainBody(pts, tangents, short, start, end, lw) ?? _curvePath([start.trim, ...pts.sublist(1, pts.length - 1), end.trim], tangents);
+    return (line: line, curve: _curvePath(pts, tangents), head: end.path, tip: b, axis: _unit(short.towardEnd, b), entry: entry,
+        headLength: full * short.size, blendFrom: short.blend > 0 && end.path != null ? entry + 0.4 * short.reach : 0, lineWidth: lw);
   }
 
   /// An arrow or line along a smooth curve through `pts` (start, bend points, end); each head points
@@ -642,7 +733,8 @@ class CanvasPainter extends CustomPainter {
     // never swamps small heads (dot, bar, open chevron) or fills a swept head's notch
     final headW = style.tapered ? w * 1.45 : w;
     final short = _shortArrow(pts, tangents, (firstC1 - a).distance > 0.5 ? firstC1 : segs.first.$4,
-        (lastC2 - b).distance > 0.5 ? lastC2 : lastA, math.max(14.0, headW * 5) * style.headSize.scale, w);
+        (lastC2 - b).distance > 0.5 ? lastC2 : lastA, math.max(14.0, headW * 5) * style.headSize.scale, w,
+        start: style.start, end: style.end, k: style.headSize.scale, headW: headW);
     final towardEnd = short.towardEnd, towardStart = short.towardStart;
     final k = style.headSize.scale * short.size;
     final taperFull = style.tapered ? _taperFull(style.end, headW, k, w) : w; // body width where it meets the head
@@ -655,6 +747,7 @@ class CanvasPainter extends CustomPainter {
           back: end.back, hollow: true);
     }
     final start = _head(style.start, a, towardStart, w, k);
+    w *= short.thin; // a short arrow's line is thinner (its heads keep their size from the full width)
 
     // The body runs between the trimmed ends (hidden under the heads), through the same bend points. A marching
     // body stops at the back of each head instead, so its moving dashes never show inside a head (a swept head's
@@ -672,17 +765,7 @@ class CanvasPainter extends CustomPainter {
     }
     final body = [from, ...pts.sublist(1, pts.length - 1), to];
     var centerline = _curvePath(body, tangents);
-    if (!style.pattern.marches && !style.tapered && short.blend > 0) {
-      centerline = _shortBody(short, start, end, (a - start.trim).distance, (b - end.trim).distance, a, b);
-    } else if (!style.pattern.marches && !style.tapered) {
-      // A plain body is the drawn curve itself, cut by length at the trims: re-fitting the spline to the trimmed ends with
-      // the curve's own end tangents made a short or sharply bent arrow wobble (or hook) just behind its head
-      final full = _curvePath(pts, tangents).computeMetrics().iterator;
-      if (full.moveNext()) {
-        final whole = full.current, s0 = (a - start.trim).distance, s1 = (b - end.trim).distance;
-        if (s0 + s1 < whole.length - 1) centerline = whole.extractPath(s0, whole.length - s1);
-      }
-    }
+    if (!style.pattern.marches && !style.tapered) centerline = _plainBody(pts, tangents, short, start, end, w) ?? centerline;
     final wedge = style.tapered ? _taperedBody(body, tangents, endWidth) : null;
 
     _styled(canvas, style, color, math.max(1.5, w * 0.35), (paint, extra) {
@@ -786,10 +869,12 @@ class CanvasPainter extends CustomPainter {
     final (_, firstC1, _, _) = segs.first;
     final (lastA, _, lastC2, _) = segs.last;
     final short = _shortArrow(pts, tangents, (firstC1 - a).distance > 0.5 ? firstC1 : segs.first.$4,
-        (lastC2 - b).distance > 0.5 ? lastC2 : lastA, math.max(14.0, w * 5) * style.headSize.scale, w);
+        (lastC2 - b).distance > 0.5 ? lastC2 : lastA, math.max(14.0, w * 5) * style.headSize.scale, w,
+        start: style.start, end: style.end, k: style.headSize.scale);
     final towardEnd = short.towardEnd, towardStart = short.towardStart;
     final k = style.headSize.scale * short.size;
     final start = _head(style.start, a, towardStart, w, k), end = _head(style.end, b, towardEnd, w, k);
+    w *= short.thin; // a short arrow's line (and the effect along it) is thinner; its heads keep their size
     // The line is the arrow's own curve, cut by length: under a filled head (a swept head's notch included) it stops where
     // the plain arrow's body does, so it meets the head with no gap; a see-through head (outlined triangle, circle, open
     // chevron) keeps the line out of it, half a line short of its back. Cutting the drawn curve, rather than re-fitting the
@@ -800,7 +885,9 @@ class CanvasPainter extends CustomPainter {
     double cut(_Head h, Offset tip) => h.path == null ? 0 : h.filled ? (tip - h.trim).distance : h.back + (h.hollow ? w / 2 : 0);
     var s0 = cut(start, a), s1 = cut(end, b);
     if (s0 + s1 > whole.length - 1) s0 = s1 = 0; // too short for both heads: the whole curve, under them
-    final line = short.blend > 0 ? _shortBody(short, start, end, s0, s1, a, b) : whole.extractPath(s0, whole.length - s1);
+    final line = short.blend > 0
+        ? _shortBody(short, start, end, _entry(start, w), _entry(end, w), a, b)
+        : whole.extractPath(s0, whole.length - s1);
     final metrics = line.computeMetrics().iterator;
     if (!metrics.moveNext() || metrics.current.length < 1) return;
     final metric = metrics.current;
@@ -1443,3 +1530,6 @@ class _PreviewStyle extends CustomPainter {
 extension _FirstOrNull<E> on Iterable<E> {
   E? get firstOrNull => isEmpty ? null : first;
 }
+
+/// How the heads sit on a short arrow ([CanvasPainter._shortArrow]).
+typedef _Short = ({double size, double blend, double thin, double reach, Offset towardStart, Offset towardEnd, ui.PathMetric? curve});
