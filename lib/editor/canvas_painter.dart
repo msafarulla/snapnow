@@ -426,7 +426,8 @@ class CanvasPainter extends CustomPainter {
     return d / len;
   }
 
-  /// A head at `tip`, pointing away from `from`. `trim` is where the body stops so its cap hides under the head.
+  /// A head at `tip`, pointing away from `from`. `trim` is where the body stops so its cap hides under the head;
+  /// `back` is how far behind the tip the head's rearmost edge is (where a marching body stops instead).
   static _Head _head(ArrowHead kind, Offset tip, Offset from, double w, double k) {
     final u = _unit(from, tip);
     final n = Offset(-u.dy, u.dx);
@@ -439,32 +440,32 @@ class CanvasPainter extends CustomPainter {
       case ArrowHead.none:
         return _Head(null, trim: tip);
       case ArrowHead.triangle:
-        return _Head(polygon([tip, at(length, half), at(length, -half)]), trim: at(length * 0.8, 0));
+        return _Head(polygon([tip, at(length, half), at(length, -half)]), trim: at(length * 0.8, 0), back: length);
       case ArrowHead.swept:
         return _Head(polygon([tip, at(length * 1.1, half), at(length * 0.7, 0), at(length * 1.1, -half)]),
-            trim: at(length * 0.6, 0));
+            trim: at(length * 0.6, 0), back: length * 1.1, hollow: true); // the notch is open
       case ArrowHead.triangleOutline:
         return _Head(polygon([tip, at(length, half), at(length, -half)]), filled: false, lineWidth: thin,
-            trim: at(length, 0));
+            trim: at(length, 0), back: length + thin / 2, hollow: true);
       case ArrowHead.open:
         return _Head(stroked([at(length * 0.75, half), tip, at(length * 0.75, -half)]), filled: false, lineWidth: w,
-            trim: tip);
+            trim: tip, back: length * 0.75, hollow: true);
       case ArrowHead.dot:
         final r = math.max(4.0, w * 1.4) * k;
-        return _Head(Path()..addOval(Rect.fromCircle(center: tip, radius: r)), trim: tip);
+        return _Head(Path()..addOval(Rect.fromCircle(center: tip, radius: r)), trim: tip, back: r);
       case ArrowHead.circle:
         final r = math.max(5.0, w * 1.8) * k;
         return _Head(Path()..addOval(Rect.fromCircle(center: tip, radius: r)), filled: false, lineWidth: thin,
-            trim: at(r, 0));
+            trim: at(r, 0), back: r + thin / 2, hollow: true);
       case ArrowHead.square:
         final s = math.max(4.0, w * 1.4) * k;
-        return _Head(polygon([at(-s, s), at(-s, -s), at(s, -s), at(s, s)]), trim: tip);
+        return _Head(polygon([at(-s, s), at(-s, -s), at(s, -s), at(s, s)]), trim: tip, back: s);
       case ArrowHead.diamond:
         final d = math.max(8.0, w * 2.8) * k;
-        return _Head(polygon([at(-d, 0), at(0, d * 0.7), at(d, 0), at(0, -d * 0.7)]), trim: tip);
+        return _Head(polygon([at(-d, 0), at(0, d * 0.7), at(d, 0), at(0, -d * 0.7)]), trim: tip, back: d);
       case ArrowHead.bar:
         final s = math.max(7.0, w * 2.4) * k;
-        return _Head(stroked([at(0, s), at(0, -s)]), filled: false, lineWidth: w, trim: tip);
+        return _Head(stroked([at(0, s), at(0, -s)]), filled: false, lineWidth: w, trim: tip, back: w / 2);
     }
   }
 
@@ -609,12 +610,26 @@ class CanvasPainter extends CustomPainter {
     if (style.tapered && style.end == ArrowHead.open) {
       // The chevron's strokes match the body, which stops just behind its point
       final u = _unit(towardEnd, b);
-      end = _Head(end.path, filled: false, lineWidth: math.max(headW, taperFull * 0.85), trim: b - u * (taperFull * 0.5));
+      end = _Head(end.path, filled: false, lineWidth: math.max(headW, taperFull * 0.85), trim: b - u * (taperFull * 0.5),
+          back: end.back, hollow: true);
     }
     final start = _head(style.start, a, towardStart, w, k);
 
-    // The body runs between the trimmed ends (hidden under the heads), through the same bend points
-    final body = [start.trim, ...pts.sublist(1, pts.length - 1), end.trim];
+    // The body runs between the trimmed ends (hidden under the heads), through the same bend points. A marching
+    // body stops at the back of each head instead, so its moving dashes never show inside a head (a swept head's
+    // notch, an outlined triangle or circle, an open chevron) and a dash never changes a head's outline. A dash's
+    // round end would still reach into a see-through head or a notch, so there it stops half a line earlier (a tapered body
+    // has a flat end). An arrow too short for that keeps the plain trims.
+    var from = start.trim, to = end.trim;
+    if (style.pattern.marches) {
+      final cap = style.tapered ? 0.0 : w / 2;
+      double room(_Head h) => h.path == null ? 0 : h.back + (h.hollow ? cap : 0);
+      if (room(start) + room(end) < (b - a).distance - w) {
+        from = a + _unit(a, towardStart) * room(start);
+        to = b + _unit(b, towardEnd) * room(end);
+      }
+    }
+    final body = [from, ...pts.sublist(1, pts.length - 1), to];
     final centerline = _curvePath(body, tangents);
     final wedge = style.tapered ? _taperedBody(body, tangents, endWidth) : null;
 
@@ -1068,7 +1083,10 @@ class _Head {
   final bool filled;
   final double lineWidth;
   final Offset trim;
-  const _Head(this.path, {this.filled = true, this.lineWidth = 0, required this.trim});
+  /// How far behind the tip the head's rearmost edge is, and whether the line would show inside the head there.
+  final double back;
+  final bool hollow;
+  const _Head(this.path, {this.filled = true, this.lineWidth = 0, required this.trim, this.back = 0, this.hollow = false});
 }
 
 /// A small preview of a line style (for the Arrowheads / Pattern menus).
