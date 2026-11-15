@@ -10,12 +10,12 @@ final class CaptureLine: NSObject {
     static let shared = CaptureLine()
 
     static let enabledKey = "captureLine.enabled"                 // on by default
-    static let showOnCaptureKey = "captureLine.showOnCapture"     // on by default
+    static let showOnCaptureKey = "captureLine.showOnCapture"     // off by default
     private static let hiddenKey = "captureLine.hidden"           // file names taken off the line on this Mac
     private static let kinds: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "gif", "mp4", "mov", "pdf"]
 
     static var enabled: Bool { Prefs.onByDefault(enabledKey) }
-    static var showOnCapture: Bool { Prefs.onByDefault(showOnCaptureKey) }
+    static var showOnCapture: Bool { Prefs.offByDefault(showOnCaptureKey) }
 
     private var panel: NSPanel?
     private var lineView: CaptureLineView?
