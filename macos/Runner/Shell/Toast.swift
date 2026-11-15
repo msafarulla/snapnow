@@ -783,7 +783,7 @@ final class LiveDraw {
         }
     }
 
-    /// ⌘W / the editor's close while in draw mode.
+    /// ⌘W / Esc / the editor's close while in draw mode.
     func endFromEditor() { if active { leave() } }
 
     private var glassShown = true

@@ -970,6 +970,8 @@ private final class BorderView: NSView {
 ///   "open" ("path": an image opened in the editor, as from Recent Captures),
 ///   "draw" (draw mode on/off, as Start Draw Mode Now), "doubletap" (a double-tap of Option: always draw mode on/off),
 ///   "colorPanel" (opens the colour panel as the colour bar's "Any color" bubble does; above the glass in draw mode),
+///   "esc" (an Escape key press put in SnapNow's own event queue, so it goes to its key window as a typed one does;
+///   nothing is sent to other apps; status.json "lastEsc" says which window was key),
 ///   "matrix" (the rain on/off), "icon" (a left click on the menu
 ///   bar icon), "region" ("x","y","w","h": a region capture of that area without the picker), "screen" (Capture Full
 ///   Screen), "scroll" ("x","y","w","h": a scrolling capture of that area), "status" (writes status.json next to the
@@ -1040,6 +1042,7 @@ enum RecorderTestControl {
         case "draw": LiveDraw.shared.toggle()
         case "colorPanel": SnapLiteNative.shared?.showColorPanel(0xE8332A)
         case "doubletap": LiveDraw.shared.doubleTap()
+        case "esc": pressEscape()
         case "matrix": MatrixRain.shared.toggle()
         case "icon": Shell.shared.testIconClick()
         case "region": Shell.shared.testRegionCapture(area)
@@ -1047,6 +1050,25 @@ enum RecorderTestControl {
         case "scroll": Shell.shared.testScrollCapture(area)
         case "status": writeStatus()
         default: Recorder.shared.diagnostic(action)
+        }
+    }
+
+    /// The last "esc" command: the key window it went to (status.json "lastEsc").
+    private static var lastEsc: [String: Any]?
+
+    private static func pressEscape() {
+        // No key window (the Mac is locked, so SnapNow cannot become active): the press is handed to the editor window itself
+        let key = NSApp.keyWindow, w = key ?? NSApp.windows.first { $0 is MainFlutterWindow }
+        lastEsc = ["at": ISO8601DateFormatter().string(from: Date()), "appActive": NSApp.isActive,
+                   "keyWindow": key.map { String(describing: type(of: $0)) } ?? "",
+                   "sentTo": key != nil ? "event queue" : w != nil ? "editor window" : "", "drawMode": LiveDraw.shared.active]
+        guard let w else { return }
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: w.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                                        isARepeat: false, keyCode: 53) {
+                if key != nil { NSApp.postEvent(e, atStart: false) } else { w.sendEvent(e) }
+            }
         }
     }
 
@@ -1070,6 +1092,7 @@ enum RecorderTestControl {
         status["overlayWindows"] = r.overlayWindowIDs.sorted().map { Int($0) }
         status["drawMode"] = LiveDraw.shared.active
         status["drawScreen"] = LiveDraw.shared.drawScreenName ?? ""
+        status["lastEsc"] = lastEsc ?? NSNull()
         status["drawClose"] = DrawClose.current.rawValue
         status["drawCloseSpeed"] = DrawCloseSpeed.current.rawValue
         status["colorPanel"] = LiveDraw.shared.colorPanelStatus

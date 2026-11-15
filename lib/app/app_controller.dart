@@ -179,9 +179,10 @@ class AppController with TrayListener, WindowListener {
     if (await libraryKey.currentState?.confirmDiscard() ?? true) await windowManager.hide();
   }
 
-  /// Esc: saves any edits without asking (unlike ⌘W), then hides the window.
+  /// Esc: saves any edits without asking (unlike ⌘W), then hides the window. In draw mode it lifts the glass, as ⌘W and
+  /// a double-tap of ⌥ do (a text being typed or a crop frame takes the Esc first: their own bindings sit nearer the focus).
   Future<void> saveAndClose() async {
-    if (drawing) return;                           // Esc never leaves draw mode (it would lose the drawing); double-tap ⌥ or ⌘W does
+    if (drawing) return Native.shell('endDraw');
     final editor = editorKey.currentState;
     if (editor != null && editor.hasUnsavedChanges) await editor.save();
     await windowManager.hide();
