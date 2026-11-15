@@ -2,19 +2,20 @@ import AppKit
 import ApplicationServices
 import QuartzCore
 
-/// Matrix rain over every display: its shortcut (Settings › Shortcuts, default ⌃⌥⇧⌘M, a system hotkey; see MatrixTrigger)
+/// Matrix rain over the display you are working on: its shortcut (Settings › Shortcuts, default ⌃⌥⇧⌘M, a system hotkey; see MatrixTrigger)
 /// or the menu's Matrix Rain turns cmatrix's rain on; the shortcut again or Escape turns it off. The same effect and timing as my browser-automation rain
 /// (MatrixColumns, a port of cmatrix): every second column, a white head, a green tail, 40 ms a frame, over a light black
-/// wash so the screen stays visible. One borderless, click-through window per display above everything (screen-saver
+/// wash so the screen stays visible. One borderless, click-through window on one display (the one draw mode would open on:
+/// LiveDraw.targetScreen(); it stays there until the rain is turned off) above everything (screen-saver
 /// level, every Space and over full-screen apps), never in a capture (sharingType none) but in a screen recording, never taking
 /// focus. A virtual display is the exception: its window is always capturable (see VirtualDisplay), so the rain is in a capture of it. Each cell is a layer showing a cached glyph image, and a frame only touches the cells that changed. Off while
-/// the screen is locked or asleep; rebuilt when displays change; never together with draw mode (opening draw mode stops
+/// the screen is locked or asleep; rebuilt when displays change (same display while it exists); never together with draw mode (opening draw mode stops
 /// it, and it does not start while draw mode is up).
 final class MatrixRain {
     static let shared = MatrixRain()
     private(set) var running = false
     private var paused = false
-    private var screens: [RainScreen] = []
+    private var screens: [RainScreen] = []     // one at most: the display chosen when the rain was turned on
     private var timer: Timer?
     private var monitors: [Any] = []
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -30,14 +31,14 @@ final class MatrixRain {
     /// seen there. Its rain window is therefore always capturable. Accepted consequence: a SnapNow capture or a
     /// screenshot of a virtual display includes the rain while it runs. Physical displays: `sharing`, as before.
     static func sharing(virtual: Bool) -> NSWindow.SharingType { virtual ? .readOnly : sharing }
-    /// Test control status.json "matrixScreens": each rain window's display, whether it is virtual, the sharing type set
+    /// Test control status.json "matrixScreens": the rain window's display (one entry while it runs), its display id, whether it is virtual, the sharing type set
     /// on the window and the one the window server reports for it.
     var screenStatus: [[String: Any]] {
         func name(_ t: NSWindow.SharingType) -> String { t == .none ? "none" : t == .readOnly ? "readOnly" : "other(\(t.rawValue))" }
         return screens.map { s in
             let info = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(s.window.windowNumber)) as? [[String: Any]])?.first
             let server = (info?[kCGWindowSharingState as String] as? UInt).flatMap { NSWindow.SharingType(rawValue: $0) }
-            return ["display": s.displayName, "virtual": s.virtual, "sharing": name(s.window.sharingType),
+            return ["display": s.displayName, "displayID": Int(s.displayID), "virtual": s.virtual, "sharing": name(s.window.sharingType),
                     "serverSharing": server.map(name) ?? "unknown"]
         }
     }
@@ -123,9 +124,13 @@ final class MatrixRain {
         timer = t
     }
 
+    /// The rain's one window. Turned on: the display you are working on (draw mode's choice). Displays changed while it
+    /// runs: the same display if it is still there, else the one you are working on now. It never follows the pointer.
     private func buildScreens() {
+        let kept = screens.first?.displayID
         for s in screens { s.window.orderOut(nil); s.window.close() }
-        screens = NSScreen.screens.map { RainScreen(screen: $0) }
+        let screen = kept.flatMap { id in NSScreen.screens.first { VirtualDisplay.id(of: $0) == id } } ?? LiveDraw.targetScreen()
+        screens = screen.map { [RainScreen(screen: $0)] } ?? []
     }
 
     private func tick() {
@@ -190,9 +195,11 @@ enum VirtualDisplay {
         return (dict["kCGDisplayIsVirtualDevice"] as? NSNumber)?.boolValue ?? false
     }
 
-    static func isVirtual(_ screen: NSScreen) -> Bool {
-        isVirtual((screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0)
+    static func id(of screen: NSScreen) -> CGDirectDisplayID {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
     }
+
+    static func isVirtual(_ screen: NSScreen) -> Bool { isVirtual(id(of: screen)) }
 }
 
 /// One display's rain: its window, its columns and a layer per used cell.
@@ -200,6 +207,7 @@ private final class RainScreen {
     let window: NSWindow
     let virtual: Bool                      // a virtual display: the window stays capturable (MatrixRain.sharing(virtual:))
     let displayName: String
+    let displayID: CGDirectDisplayID
     private var engine: MatrixColumns
     private let glyphs: RainGlyphs
     private var cells: [CALayer] = []      // row-major: rows 0..<lines, used (even) columns only
@@ -210,6 +218,7 @@ private final class RainScreen {
         glyphs = RainGlyphs.shared(scale: screen.backingScaleFactor)
         virtual = VirtualDisplay.isVirtual(screen)
         displayName = screen.localizedName
+        displayID = VirtualDisplay.id(of: screen)
         let size = screen.frame.size, cw = glyphs.cell.width, ch = glyphs.cell.height
         let cols = max(1, Int(size.width / cw)), lines = max(1, Int(size.height / ch))
         engine = MatrixColumns(lines: lines, cols: cols)
