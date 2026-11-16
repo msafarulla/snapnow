@@ -75,12 +75,14 @@ final class CaptureLine: NSObject {
             let newest = self.files(limit: 1).first.map(self.modified) ?? .distantPast
             let isNew = newest > self.newestSeen
             self.newestSeen = max(newest, self.newestSeen)
+            self.justHung = isNew ? self.files(limit: 1).first : nil
             if self.isShown { self.reload() }
             // a new capture: the line comes down for a moment, unless draw mode has the screen
             if isNew, Self.showOnCapture, !LiveDraw.shared.busy {
                 self.holdUntil = Date().addingTimeInterval(3)
                 self.show(on: self.screenUnderPointer() ?? NSScreen.main)
             }
+            self.justHung = nil
         }
         folderWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)   // the file is written, renamed, stamped: one look
@@ -208,10 +210,13 @@ final class CaptureLine: NSObject {
         }) { t in panel.alphaValue = from * (1 - t) }
     }
 
+    /// A capture that just arrived: it swings a little on its peg when it is hung.
+    private var justHung: URL?
+
     private func reload(width: CGFloat? = nil) {
         guard let lineView else { return }
         let w = width ?? lineView.bounds.width
-        lineView.setFiles(files(limit: 80), width: w)      // more than fit: the line scrolls
+        lineView.setFiles(files(limit: 80), width: w, swinging: justHung)      // more than fit: the line scrolls
     }
 
     // MARK: - While dragging one out
@@ -265,9 +270,9 @@ final class CaptureLine: NSObject {
     }
 }
 
-/// The strip: a soft shade from the top edge, the cord, and one card per capture hanging from it.
+/// The strip: a light shade from the top edge, a thin cord, and one card per capture pegged to it.
 final class CaptureLineView: NSView {
-    static let slot: CGFloat = 150
+    static let slot: CGFloat = 184               // a card and a generous gap
     private unowned let owner: CaptureLine
     private var cards: [CaptureCardView] = []
     private var shown: [URL] = []
@@ -283,7 +288,7 @@ final class CaptureLineView: NSView {
     override var isFlipped: Bool { true }
 
     /// The cord sags a little towards the middle.
-    private func cordY(at x: CGFloat, width: CGFloat) -> CGFloat {
+    func cordY(at x: CGFloat, width: CGFloat) -> CGFloat {
         let t = max(0, min(1, x / max(1, width)))
         return 12 + 4 * 12 * t * (1 - t)
     }
@@ -292,16 +297,18 @@ final class CaptureLineView: NSView {
     private var offset: CGFloat = 0
     private var lineWidth: CGFloat = 0
 
-    func setFiles(_ files: [URL], width: CGFloat) {
+    /// [swinging]: a capture that just arrived; its card swings a little on its peg and comes to rest.
+    func setFiles(_ files: [URL], width: CGFloat, swinging: URL? = nil) {
         if files == shown, abs(lineWidth - width) < 1, !cards.isEmpty { return }
         let sameSet = files.first == shown.first
         shown = files
         lineWidth = width
         cards.forEach { $0.removeFromSuperview() }
-        cards = files.enumerated().map { i, url in CaptureCardView(url: url, owner: owner, tilt: i % 2 == 0 ? -1.6 : 1.4) }
+        cards = files.map { CaptureCardView(url: $0, owner: owner) }
         cards.forEach { addSubview($0) }
         if !sameSet { offset = 0 }                 // a new capture: back to the newest
         place()
+        if let swinging { cards.first { $0.url == swinging }?.swing() }
     }
 
     /// What does not fit to the right is reached by scrolling.
@@ -315,7 +322,7 @@ final class CaptureLineView: NSView {
         for (i, card) in cards.enumerated() {
             let x = start + CGFloat(i) * Self.slot
             card.isHidden = x < -Self.slot || x > lineWidth + Self.slot
-            if !card.isHidden { card.hang(centerX: x, top: cordY(at: x, width: lineWidth) - 5) }
+            if !card.isHidden { card.hang(on: NSPoint(x: x, y: cordY(at: x, width: lineWidth))) }
         }
         needsDisplay = true
     }
@@ -330,65 +337,68 @@ final class CaptureLineView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let w = bounds.width
-        // shade: darkest at the top edge, gone by the bottom of the strip
-        NSGradient(colors: [NSColor.black.withAlphaComponent(0.42), NSColor.black.withAlphaComponent(0.16), .clear])?
+        // shade: light at the top edge, gone by the bottom of the strip (enough for the cord on a pale desktop)
+        NSGradient(colors: [NSColor.black.withAlphaComponent(0.26), NSColor.black.withAlphaComponent(0.08), .clear])?
             .draw(in: bounds, angle: 90)
+        // the cord: thin and light grey, with a faint dark line under it so it reads on a light desktop too
         let cord = NSBezierPath()
-        cord.move(to: NSPoint(x: -4, y: 12))
-        cord.curve(to: NSPoint(x: w + 4, y: 12), controlPoint1: NSPoint(x: w * 0.33, y: 28), controlPoint2: NSPoint(x: w * 0.67, y: 28))
-        cord.lineWidth = 2
-        NSColor.white.withAlphaComponent(0.85).setStroke()
+        cord.move(to: NSPoint(x: -4, y: cordY(at: 0, width: w)))
+        for x in stride(from: CGFloat(8), through: w + 4, by: 8) { cord.line(to: NSPoint(x: x, y: cordY(at: x, width: w))) }
+        cord.lineJoinStyle = .round
+        let under = cord.copy() as! NSBezierPath
+        under.transform(using: AffineTransform(translationByX: 0, byY: 0.8))
+        under.lineWidth = 1.6
+        NSColor.black.withAlphaComponent(0.22).setStroke()
+        under.stroke()
+        cord.lineWidth = 1.2
+        NSColor(white: 0.86, alpha: 0.95).setStroke()
         cord.stroke()
-        let hint: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 20, weight: .semibold), .foregroundColor: NSColor.white.withAlphaComponent(0.8)]
+        let lift = NSShadow()
+        lift.shadowColor = NSColor.black.withAlphaComponent(0.5)
+        lift.shadowBlurRadius = 3
+        let hint: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 20, weight: .semibold),
+                                                   .foregroundColor: NSColor.white.withAlphaComponent(0.85), .shadow: lift]
         if offset > 1 { ("‹" as NSString).draw(at: NSPoint(x: 6, y: 58), withAttributes: hint) }
         if offset < maxOffset - 1 { ("›" as NSString).draw(at: NSPoint(x: w - 16, y: 58), withAttributes: hint) }
         if cards.isEmpty {
             let text = "No captures yet"
-            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.font(13), .foregroundColor: NSColor.white.withAlphaComponent(0.85)]
+            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.font(13), .foregroundColor: NSColor.white.withAlphaComponent(0.9), .shadow: lift]
             let size = (text as NSString).size(withAttributes: attrs)
             (text as NSString).draw(at: NSPoint(x: (w - size.width) / 2, y: 44), withAttributes: attrs)
         }
     }
 }
 
-/// One capture on the line: a peg on the cord, the picture under it. The drag source.
+/// One capture on the line: a card with a see-through frame around the picture, held by a peg that sits over the cord,
+/// hanging a little askew (its own tilt, the same every time). The drag source.
 final class CaptureCardView: NSView, NSDraggingSource {
-    private static let maxSize = NSSize(width: 128, height: 88)
-    private static let pegHeight: CGFloat = 16
+    static let cardSize = NSSize(width: 132, height: 92)
+    private static let margin: CGFloat = 14       // room for the shadow around the card
+    private static let cardTop: CGFloat = 16      // the peg sticks up this far above the card
+    private static let pegGrip: CGFloat = 9       // where the cord runs through the peg, from the top of the view
+    private static let frameWidth: CGFloat = 5    // the glass around the picture
     private static var thumbs = NSCache<NSString, NSImage>()
 
     let url: URL
+    let tilt: CGFloat
     private unowned let owner: CaptureLine
-    private let picture = NSImageView()
+    private var image: NSImage?
     private var downAt: NSPoint?
     private var dragStarted = false
-    private var restY: CGFloat = 0
+    private var anchor = NSPoint.zero             // the point on the cord the peg holds, in the line's coordinates
+    private var angle: CGFloat = 0
+    private var swingTimer: Timer?
     private var hovering = false { didSet { if hovering != oldValue { settle() } } }
 
-    init(url: URL, owner: CaptureLine, tilt: CGFloat) {
+    init(url: URL, owner: CaptureLine) {
         self.url = url
         self.owner = owner
-        super.init(frame: NSRect(origin: .zero, size: NSSize(width: Self.maxSize.width + 8, height: Self.maxSize.height + 8 + Self.pegHeight)))
+        tilt = Self.tilt(for: url.lastPathComponent)
+        angle = tilt
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.cardSize.width + 2 * Self.margin,
+                                 height: Self.cardTop + Self.cardSize.height + Self.margin + 4))
         wantsLayer = true
-        frameCenterRotation = tilt
         toolTip = url.deletingPathExtension().lastPathComponent
-        picture.imageScaling = .scaleProportionallyUpOrDown
-        picture.wantsLayer = true
-        picture.layer?.cornerRadius = 5
-        picture.layer?.masksToBounds = true
-        picture.layer?.borderWidth = 2
-        picture.layer?.borderColor = NSColor.white.cgColor
-        picture.layer?.backgroundColor = NSColor(white: 0.12, alpha: 1).cgColor
-        picture.unregisterDraggedTypes()
-        addSubview(picture)
-        shadow = {
-            let s = NSShadow()
-            s.shadowColor = NSColor.black.withAlphaComponent(0.45)
-            s.shadowBlurRadius = 8
-            s.shadowOffset = NSSize(width: 0, height: -3)
-            return s
-        }()
-        layoutPicture(for: Self.maxSize)
         loadThumbnail()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
@@ -398,25 +408,62 @@ final class CaptureCardView: NSView, NSDraggingSource {
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    func hang(centerX: CGFloat, top: CGFloat) {
-        restY = top
-        setFrameOrigin(NSPoint(x: centerX - frame.width / 2, y: top))
+    /// Between -3 and +3 degrees, never quite straight, from the file name (not Swift's hashValue, which changes every launch).
+    static func tilt(for name: String) -> CGFloat {
+        var h: UInt32 = 2166136261
+        for b in name.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
+        let size = 0.6 + 2.4 * CGFloat(h % 1000) / 999
+        return h & 0x10000 == 0 ? -size : size
     }
 
-    /// The picture keeps its shape inside the card, hanging from the peg.
-    private func layoutPicture(for size: NSSize) {
-        let scale = min(Self.maxSize.width / max(1, size.width), Self.maxSize.height / max(1, size.height))
-        let w = max(40, size.width * scale), h = max(30, size.height * scale)
-        picture.frame = NSRect(x: (bounds.width - w) / 2, y: Self.pegHeight - 4, width: w, height: h)
-        needsDisplay = true
+    var cardRect: NSRect { NSRect(x: Self.margin, y: Self.cardTop, width: Self.cardSize.width, height: Self.cardSize.height) }
+    var pictureRect: NSRect { cardRect.insetBy(dx: Self.frameWidth, dy: Self.frameWidth) }
+    var pegPoint: NSPoint { NSPoint(x: bounds.midX, y: Self.pegGrip) }
+
+    /// The peg on [point] of the cord.
+    func hang(on point: NSPoint) {
+        anchor = point
+        settle()
+    }
+
+    /// Turned by [angle] around the peg, the peg on its point of the cord (lower by a little under the pointer).
+    private func settle() {
+        guard let superview else { return }
+        frameCenterRotation = angle
+        let peg = superview.convert(pegPoint, from: self)
+        let target = NSPoint(x: anchor.x, y: anchor.y + (hovering ? 6 : 0))
+        setFrameOrigin(NSPoint(x: frame.origin.x + target.x - peg.x, y: frame.origin.y + target.y - peg.y))
+    }
+
+    /// Just hung: a small swing on the peg that dies out within a second and a half, then nothing moves.
+    func swing() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        swingTimer?.invalidate()
+        let began = Date()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self, self.window != nil else { timer.invalidate(); return }
+            let t = CGFloat(Date().timeIntervalSince(began))
+            let done = t >= 1.5
+            self.angle = self.tilt + (done ? 0 : Self.swingAngle(at: t))
+            self.settle()
+            if done { timer.invalidate(); self.swingTimer = nil }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        swingTimer = timer
+    }
+
+    /// Degrees away from the card's own tilt [t] seconds after it was hung: 7, swinging back and forth, dying out.
+    static func swingAngle(at t: CGFloat) -> CGFloat { 7 * exp(-3 * t) * cos(2 * .pi * 1.4 * t) * max(0, 1 - t / 1.5) }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { swingTimer?.invalidate(); swingTimer = nil }
     }
 
     private func loadThumbnail() {
         let stamp = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
         let key = "\(url.path)-\(stamp)" as NSString
         if let cached = Self.thumbs.object(forKey: key) {
-            picture.image = cached
-            layoutPicture(for: cached.size)
+            image = cached
             return
         }
         let request = QLThumbnailGenerator.Request(fileAt: url, size: NSSize(width: 256, height: 176),
@@ -425,22 +472,102 @@ final class CaptureCardView: NSView, NSDraggingSource {
             guard let image = rep?.nsImage else { return }
             DispatchQueue.main.async {
                 Self.thumbs.setObject(image, forKey: key)
-                self?.picture.image = image
-                self?.layoutPicture(for: image.size)
+                self?.image = image
+                self?.needsDisplay = true
             }
         }
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        // the peg: over the cord at the top, gripping the picture's top edge
-        let peg = NSBezierPath(roundedRect: NSRect(x: bounds.midX - 4, y: 0, width: 8, height: Self.pegHeight), xRadius: 3, yRadius: 3)
-        Theme.accent.setFill()
-        peg.fill()
+    /// For the check tool, which has no thumbnail service to wait for.
+    func show(_ image: NSImage) {
+        self.image = image
+        needsDisplay = true
     }
 
-    /// Under the pointer the card drops a little towards you.
-    private func settle() {
-        setFrameOrigin(NSPoint(x: frame.minX, y: restY + (hovering ? 6 : 0)))
+    override func draw(_ dirtyRect: NSRect) {
+        let card = cardRect
+        let outline = NSBezierPath(roundedRect: card, xRadius: 13, yRadius: 13)
+        // a soft shadow, outside the card only (the frame is see-through)
+        NSGraphicsContext.saveGraphicsState()
+        let outside = NSBezierPath(rect: bounds)
+        outside.append(outline)
+        outside.windingRule = .evenOdd
+        outside.addClip()
+        let shade = NSShadow()
+        shade.shadowColor = NSColor.black.withAlphaComponent(0.4)
+        shade.shadowBlurRadius = 10
+        shade.shadowOffset = NSSize(width: 0, height: -4)
+        shade.set()
+        NSColor.black.setFill()
+        outline.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        // the glass: a pale grey tint (it shows on a light desktop as well as a dark one), brighter at the top
+        NSColor(white: 0.6, alpha: 0.2).setFill()
+        outline.fill()
+        NSGradient(colors: [NSColor.white.withAlphaComponent(0.3), NSColor.white.withAlphaComponent(0.06)])?.draw(in: outline, angle: 90)
+        // the picture, filling its place (aspect kept, the overflow cropped evenly)
+        let place = pictureRect
+        let inner = NSBezierPath(roundedRect: place, xRadius: 8, yRadius: 8)
+        NSGraphicsContext.saveGraphicsState()
+        inner.addClip()
+        if let image, image.size.width > 0, image.size.height > 0 {
+            let s = image.size
+            let scale = max(place.width / s.width, place.height / s.height)
+            let w = place.width / scale, h = place.height / scale
+            image.draw(in: place, from: NSRect(x: (s.width - w) / 2, y: (s.height - h) / 2, width: w, height: h),
+                       operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+        } else {
+            NSColor(white: 0.15, alpha: 0.5).setFill()
+            inner.fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        inner.lineWidth = 0.5
+        NSColor.black.withAlphaComponent(0.25).setStroke()
+        inner.stroke()
+        // the faint light edge of the glass, and a hairline round it for a pale desktop
+        let edge = NSBezierPath(roundedRect: card.insetBy(dx: 0.75, dy: 0.75), xRadius: 12.25, yRadius: 12.25)
+        edge.lineWidth = 1
+        NSColor.white.withAlphaComponent(0.55).setStroke()
+        edge.stroke()
+        let rim = NSBezierPath(roundedRect: card.insetBy(dx: -0.25, dy: -0.25), xRadius: 13.25, yRadius: 13.25)
+        rim.lineWidth = 0.5
+        NSColor.black.withAlphaComponent(0.2).setStroke()
+        rim.stroke()
+        drawPeg()
+    }
+
+    /// A small silver-white clothes peg over the cord, gripping the top of the card.
+    private func drawPeg() {
+        let r = NSRect(x: bounds.midX - 5, y: 1, width: 10, height: 26)
+        let body = NSBezierPath(roundedRect: r, xRadius: 2.5, yRadius: 2.5)
+        NSGraphicsContext.saveGraphicsState()
+        let drop = NSShadow()
+        drop.shadowColor = NSColor.black.withAlphaComponent(0.4)
+        drop.shadowBlurRadius = 2.5
+        drop.shadowOffset = NSSize(width: 0, height: -1)
+        drop.set()
+        NSColor(white: 0.9, alpha: 1).setFill()
+        body.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        // rounded like a cylinder: light on the left, greyer on the right
+        NSGradient(colors: [NSColor(white: 0.84, alpha: 1), NSColor.white, NSColor(white: 0.93, alpha: 1), NSColor(white: 0.74, alpha: 1)])?
+            .draw(in: body, angle: 0)
+        // the gap between its two halves, below the spring
+        let gap = NSBezierPath()
+        gap.move(to: NSPoint(x: r.midX, y: r.minY + 14))
+        gap.line(to: NSPoint(x: r.midX, y: r.maxY - 0.5))
+        gap.lineWidth = 0.75
+        NSColor.black.withAlphaComponent(0.3).setStroke()
+        gap.stroke()
+        // the spring: a metal band across it
+        let spring = NSBezierPath(roundedRect: NSRect(x: r.minX - 1, y: r.minY + 10, width: r.width + 2, height: 3.5), xRadius: 1.5, yRadius: 1.5)
+        NSGradient(colors: [NSColor(white: 0.85, alpha: 1), NSColor(white: 0.55, alpha: 1), NSColor(white: 0.7, alpha: 1)])?.draw(in: spring, angle: 90)
+        spring.lineWidth = 0.5
+        NSColor.black.withAlphaComponent(0.35).setStroke()
+        spring.stroke()
+        body.lineWidth = 0.5
+        NSColor.black.withAlphaComponent(0.35).setStroke()
+        body.stroke()
     }
 
     override func mouseEntered(with event: NSEvent) { hovering = true }
@@ -465,7 +592,13 @@ final class CaptureCardView: NSView, NSDraggingSource {
             item.setData(data, forType: ext == "png" ? .png : (ext == "tiff" ? .tiff : NSPasteboard.PasteboardType("public.jpeg")))
         }
         let dragItem = NSDraggingItem(pasteboardWriter: item)
-        dragItem.setDraggingFrame(picture.frame, contents: picture.image)
+        var frame = pictureRect                    // the picture in its own shape over its place on the card
+        if let size = image?.size, size.width > 0, size.height > 0 {
+            let scale = min(frame.width / size.width, frame.height / size.height)
+            frame = NSRect(x: frame.midX - size.width * scale / 2, y: frame.midY - size.height * scale / 2,
+                           width: size.width * scale, height: size.height * scale)
+        }
+        dragItem.setDraggingFrame(frame, contents: image)
         let session = beginDraggingSession(with: [dragItem], event: event, source: self)
         session.animatesToStartingPositionsOnCancelOrFail = true
         owner.dragBegan()
