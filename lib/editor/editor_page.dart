@@ -64,7 +64,15 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   final _canvasKey = GlobalKey();
   final _focus = FocusNode(debugLabel: "editor"); // keyboard shortcuts go to the editor, not the hidden Library grid
   bool _editingDims = false; // the W×H fields under the image have focus: let them keep Backspace etc.
-  Size? _originalSize; // the image's dimensions when the document was created/opened (for "fit to original")
+  /// The on-screen footprint of a base image, in image points at 100%: its own size, unless the W x H fields reduced its
+  /// pixel count (then it keeps the footprint it had, and is only grainier). It belongs to the image, so undo and redo
+  /// bring it back with their state. When the canvas itself changes extent (an image dropped or dragged past an edge, a
+  /// crop, the canvas handles), the footprint changes by the same factor: the picture keeps its shape and the canvas
+  /// adapts. Before 1.87.2 the footprint was fixed when the file was opened, so a canvas that grew around a dropped image
+  /// was squeezed back into the old footprint, each axis by itself (user: "it is entirely changing the dimensions").
+  final _footprints = Expando<Size>('footprint');
+  Size _footprintOf(ui.Image image) => _footprints[image] ?? Size(image.width.toDouble(), image.height.toDouble());
+  Size? get _originalSize => _state == null ? null : _footprintOf(_state!.image);
   int? _imageBytes; // the current base image's PNG size, shown after the W×H readout
   ui.Image? _bytesImage; // which image _imageBytes was measured for, so edits that don't touch it skip the work
 
@@ -341,7 +349,6 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     canvas.drawRect(Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()), Paint()..color = Colors.white);
     final img = await recorder.endRecording().toImage(w, h);
     setState(() => _state = _savedState = CanvasState(image: img));
-    _originalSize = Size(w.toDouble(), h.toDouble());
     _refreshImageBytes();
   }
 
@@ -351,6 +358,12 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       _redo.clear();
     }
     _clearCopied(); // any edit ends the "copied" marching ants
+    final old = _state?.image, now = next.image;
+    if (old != null && !identical(old, now) && _footprints[now] == null) {
+      // a new canvas extent (grown, cropped, resized by its handles): the footprint follows it, axis by axis
+      final f = _footprintOf(old);
+      _footprints[now] = Size(f.width * now.width / old.width, f.height * now.height / old.height);
+    }
     setState(() => _state = next);
     _refreshImageBytes();
   }
@@ -1181,6 +1194,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     Canvas(rec).drawImageRect(s.image, src, Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
         Paint()..filterQuality = FilterQuality.high);
     final out = await rec.endRecording().toImage(w, h);
+    _footprints[out] = _footprintOf(s.image); // fewer (or more) pixels in the same place on screen
     _commit(s.copyWith(image: out, annotations: [for (final a in s.annotations) a.scaledBy(sx, sy)]));
   }
 
@@ -1515,7 +1529,6 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       _canvasDrag = null;
       _zoom = null; // a new image opens fitted
       _pan = Offset.zero;
-      _originalSize = Size(state!.image.width.toDouble(), state.image.height.toDouble());
     });
     _clearCopied();
     _refreshImageBytes();
@@ -2848,7 +2861,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
       final iw = state.image.width.toDouble(), ih = state.image.height.toDouble();
       // Display at the ORIGINAL capture's footprint, so reducing the pixel count (for a smaller file) makes
       // the picture grainier without shrinking it on the canvas. Falls back to the current size pre-load.
-      final dw = _originalSize?.width ?? iw, dh = _originalSize?.height ?? ih;
+      final foot = _footprintOf(state.image), dw = foot.width, dh = foot.height;
       final view = Size(constraints.maxWidth, constraints.maxHeight);
       // The picture is fitted into the area the floating chrome leaves free (toolbar above, inspector at the
       // right, the host's filmstrip below); zoomed in, it may pan under the chrome, which is translucent.
