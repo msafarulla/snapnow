@@ -363,6 +363,8 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   String? get path => _path;
   @visibleForTesting
   CanvasState? get state => _state;
+  @visibleForTesting
+  void debugSetState(CanvasState s) => setState(() => _state = s); // a picture with its markup, without drawing it by hand
 
   void _undoAction() {
     if (_textEdit != null) return _endTextEdit(cancel: true);
@@ -718,6 +720,33 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
     _antsTimer?.cancel();
     _antsTimer = null;
     setState(() => _copied = false);
+  }
+
+  /// The committed picture as one or two cached layers at the image's place. With nothing marching it is one layer,
+  /// painted once. With a marching (or effect) annotation it is two: everything below the first such annotation
+  /// (base image, blur patches, spotlight and the still annotations under it) stays in the cached layer, and only the
+  /// annotations from that one up are repainted on each march tick, in their own layer on top, so the order is kept.
+  /// Before 1.87.1 one marching arrow made the whole picture repaint 25 times a second (8-17% CPU, more on big pictures).
+  /// While something is played or fading out (the state changes every frame anyway) it stays one animated layer.
+  List<Widget> _pictureLayers(CanvasState state, Offset origin, Size fitted, double scale, double scaleY) {
+    final playing = _playId != null, fourier = playing && BuildUpGif.fourier;
+    CanvasPainter picture({int first = 0, int? end, bool under = true, bool animate = false}) => CanvasPainter(
+        state: state, selectionId: null, scale: scale, scaleY: scaleY, clearBase: widget.overlay, fade: _fadeOut,
+        flyFrom: _flyFrom, flyTo: _flyTo, hiddenTextId: _textEdit?.id, march: _march, epicycles: fourier,
+        envelope: playing && BuildUpGif.envelope, first: first, end: end, under: under, animate: animate,
+        progress: !playing ? null : {for (final a in state.annotations) a.id: a.id == _playId ? _playT : 1.0});
+    Widget layer(CanvasPainter painter, {required bool moving}) => Positioned(
+          left: origin.dx, top: origin.dy, width: fitted.width, height: fitted.height,
+          // a moving layer is new on every tick: nothing to keep, so the engine is told not to try
+          child: ClipRect(child: RepaintBoundary(child: CustomPaint(isComplex: !moving, willChange: moving, painter: painter))),
+        );
+    final k = CanvasPainter.firstAnimated(state);
+    if (k < 0) return [layer(picture(), moving: false)];
+    if (playing || _fadeOut != null) return [layer(picture(animate: true), moving: true)];
+    return [
+      layer(picture(end: k), moving: false),
+      layer(picture(first: k, under: false, animate: true), moving: true),
+    ];
   }
 
   void _syncMarch(CanvasState state) {
@@ -2910,18 +2939,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
                       // until the state, zoom or an animation changes it. Pointer moves, live previews, handles
                       // and marching ants only redraw the overlay on top, which matters on a big display where the
                       // picture is tens of megapixels and blur patches and shadows are costly to re-render.
-                      Positioned(
-                        left: origin.dx, top: origin.dy, width: fitted.width, height: fitted.height,
-                        child: ClipRect(child: RepaintBoundary(child: CustomPaint(
-                          isComplex: true,
-                          painter: CanvasPainter(state: state, selectionId: null, scale: scale, scaleY: scaleY, clearBase: widget.overlay, fade: _fadeOut, flyFrom: _flyFrom, flyTo: _flyTo,
-                              hiddenTextId: _textEdit?.id, march: _march, epicycles: _playId != null && BuildUpGif.fourier,
-                              envelope: _playId != null && BuildUpGif.envelope,
-                              animate: state.annotations.any((a) => a.styleKind != null &&
-                                  (a.arrowStyle.pattern.marches || a.arrowStyle.effect != ArrowEffect.none)),
-                              progress: _playId == null ? null : {for (final a in state.annotations) a.id: a.id == _playId ? _playT : 1.0}),
-                        ))),
-                      ),
+                      ..._pictureLayers(state, origin, fitted, scale, scaleY),
                       Positioned.fill(child: CustomPaint(
                       painter: _PreviewPainter(
                         base: CanvasPainter(state: state, selectionId: _playId == null ? _selection : null, scale: scale, scaleY: scaleY,

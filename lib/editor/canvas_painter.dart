@@ -36,11 +36,34 @@ class CanvasPainter extends CustomPainter {
   /// also bounds the layer of its final fade, so many marks in flight never mean many display-sized layers. Null: a plain fade.
   final Map<int, Rect>? flyFrom;
   final Offset? flyTo;
+  /// Which part of the picture this painter draws, so the editor can keep the costly, unchanging part in one cached layer
+  /// and repaint only the rest on every [march] tick: the annotations from index [first] up to (not including) [end]
+  /// (null = the last one), and with [under] what lies below all of them: the canvas colour, the base image, blur patches
+  /// and the spotlight. The defaults draw everything. Step numbers count every step in the state, whichever part it is in.
+  final int first;
+  final int? end;
+  final bool under;
+
+  /// Whether [a] moves with [march] once it is committed (Marching Ants patterns and the animated effects).
+  static bool animates(Annotation a) =>
+      a.styleKind != null && (a.arrowStyle.pattern.marches || a.arrowStyle.effect != ArrowEffect.none);
+
+  /// The index of the first annotation that [animates], or -1 when the picture stands still.
+  static int firstAnimated(CanvasState s) => s.annotations.indexWhere(animates);
+
+  /// How many times a painter has drawn the [under] part (tests: the base picture must not be redrawn on march ticks).
+  @visibleForTesting
+  static int underPaints = 0;
+
+  /// How many times a painter has drawn a part without [under] (tests: the marching part must keep repainting).
+  @visibleForTesting
+  static int overPaints = 0;
 
   /// [animate] makes the painter repaint on every [march] tick: only wanted when a committed annotation
   /// actually marches, so the editor's cached picture layer isn't re-rasterised 25× a second for nothing.
   CanvasPainter({required this.state, required this.selectionId, required this.scale, this.scaleY, this.hiddenTextId,
-      this.progress, this.march, this.epicycles = false, this.envelope = false, this.clearBase = false, this.fade, this.flyFrom, this.flyTo, bool animate = false})
+      this.progress, this.march, this.epicycles = false, this.envelope = false, this.clearBase = false, this.fade, this.flyFrom, this.flyTo,
+      this.first = 0, this.end, this.under = true, bool animate = false})
       : super(repaint: animate ? march : null);
 
   double get _sy => scaleY ?? scale; // vertical scale, == scale unless a non-proportional editor resize set it
@@ -103,7 +126,8 @@ class CanvasPainter extends CustomPainter {
     canvas.scale(scale, _sy); // draw everything in image coordinates (per-axis after a non-proportional resize)
     final img = state.image;
     final imageRect = Rect.fromLTWH(0, 0, img.width.toDouble(), img.height.toDouble());
-    if (!clearBase) {
+    under ? underPaints++ : overPaints++;
+    if (under && !clearBase) {
       canvas.drawRect(imageRect, Paint()..color = state.background); // canvas colour behind the image
       // Smoothed when drawn smaller (GIFs at point size, zoomed-out editor): unfiltered drops pixels, jagged text
       canvas.drawImage(img, Offset.zero, Paint()..filterQuality = FilterQuality.medium);
@@ -111,7 +135,7 @@ class CanvasPainter extends CustomPainter {
 
     // Blur patches first, then spotlight dimming, then the rest in order.
     final spotlights = <(Rect, double)>[];
-    for (final a in state.annotations) {
+    for (final a in under ? state.annotations : const <Annotation>[]) {
       final t = _shown(a), o = _opacity(a);
       if (t <= 0 || o <= 0) continue;
       switch (a.shape) {
@@ -126,8 +150,11 @@ class CanvasPainter extends CustomPainter {
     if (spotlights.isNotEmpty) _drawSpotlight(canvas, spotlights, imageRect);
 
     var step = 0;
-    for (final a in state.annotations) {
+    final last = end ?? state.annotations.length;
+    for (var i = 0; i < state.annotations.length; i++) {
+      final a = state.annotations[i];
       if (a.shape is StepShape) step += 1; // steps keep their final numbers while the others are still hidden
+      if (i < first || i >= last) continue; // another painter's part
       final t = _shown(a), o = _opacity(a);
       if (t <= 0 || o <= 0) continue;
       switch (a.shape) {
@@ -1455,7 +1482,8 @@ class CanvasPainter extends CustomPainter {
   bool shouldRepaint(covariant CanvasPainter old) =>
       old.state != state || old.selectionId != selectionId || old.scale != scale || old.scaleY != scaleY ||
       old.hiddenTextId != hiddenTextId || old.progress != progress || old.march != march || old.epicycles != epicycles ||
-      old.envelope != envelope || old.fade != fade || old.flyFrom != flyFrom || old.flyTo != flyTo;
+      old.envelope != envelope || old.fade != fade || old.flyFrom != flyFrom || old.flyTo != flyTo ||
+      old.first != first || old.end != end || old.under != under;
 }
 
 /// The kinds of handle on a selected arrow or line.
