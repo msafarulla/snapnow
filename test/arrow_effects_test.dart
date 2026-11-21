@@ -33,6 +33,46 @@ void main() {
   Future<Uint32List> effect(ArrowEffect e, double phase) => paint((c) => CanvasPainter.drawEffect(
       c, plain.curve!, plain.arrowStyle.copyWith(effect: e), Colors.cyan, plain.lineWidth, phase: phase));
 
+  // Along the straight test arrow's line, well clear of both heads: where a picture is clearly darker than the same
+  // arrow drawn solid, i.e. where the pattern's gaps are (a glow may spill into a gap, so not "the bare background")
+  int light(int rgba) => (rgba & 0xFF) + ((rgba >> 8) & 0xFF) + ((rgba >> 16) & 0xFF);
+  List<bool> gaps(Uint32List px, Uint32List solid) => [
+        for (var i = 0; i <= 200; i++)
+          () {
+            final f = 0.15 + 0.6 * i / 200;
+            final at = (170 - 140 * f).round() * 400 + (30 + 340 * f).round();
+            return light(px[at]) < light(solid[at]) - 90;
+          }()
+      ];
+  int count(List<bool> g) => g.where((x) => x).length;
+
+  Future<Uint32List> patterned(ArrowEffect e, LinePattern p, double phase) => paint((c) => CanvasPainter.drawEffect(
+      c, plain.curve!, plain.arrowStyle.copyWith(effect: e, pattern: p), Colors.cyan, plain.lineWidth, phase: phase));
+
+  for (final e in effects) {
+    test('${e.label}: follows the line pattern - gaps in a dashed or dotted line, none in a solid one', () async {
+      final solid = await effect(e, 0.2);
+      for (final p in [LinePattern.dashed, LinePattern.dotted, LinePattern.dashDot, LinePattern.longDash]) {
+        final n = count(gaps(await patterned(e, p, 0.2), solid));
+        expect(n, greaterThan(8), reason: '${p.label}: the line is missing in the gaps');
+        expect(n, lessThan(190), reason: '${p.label}: the dashes are still there');
+      }
+    });
+
+    test('${e.label}: a Marching pattern moves its dashes and loops; a still pattern keeps them in place', () async {
+      final solid2 = await effect(e, 0.2), solid7 = await effect(e, 0.7);
+      final a = await patterned(e, LinePattern.ants, 0.2), b = await patterned(e, LinePattern.ants, 0.7);
+      int moved(List<bool> x, List<bool> y) => [for (var i = 0; i < x.length; i++) x[i] != y[i]].where((d) => d).length;
+      final marching = moved(gaps(a, solid2), gaps(b, solid7));
+      final still = moved(gaps(await patterned(e, LinePattern.dashed, 0.2), solid2), gaps(await patterned(e, LinePattern.dashed, 0.7), solid7));
+      // (the effect itself moves, so a still pattern is not pixel-still: it must just move clearly less)
+      expect(marching, greaterThan(45), reason: 'half a loop later the dashes are elsewhere');
+      expect(still, lessThan(marching - 25), reason: 'a still pattern stays where it is');
+      final loop = e == ArrowEffect.neon ? CanvasPainter.neonLoops : 1;
+      expect(differing(a, await patterned(e, LinePattern.ants, 0.2 + loop)), 0, reason: 'seamless loop');
+    });
+  }
+
   for (final e in effects) {
     test('${e.label}: looks unlike the plain arrow, moves with the phase and loops seamlessly', () async {
       final still = await paint((c) => CanvasPainter.drawAnnotation(c, plain));
@@ -40,12 +80,78 @@ void main() {
       expect(differing(still, a), greaterThan(1500));
       final later = await effect(e, 0.45);
       expect(differing(a, later), greaterThan(150), reason: 'it moves');
-      final wrapped = await effect(e, 1.2);
-      expect(differing(a, wrapped), 0, reason: 'phase 1.2 is phase 0.2: the loop is seamless');
+      // Neon breathes once per CanvasPainter.neonLoops march loops; every other effect once per loop
+      final loop = e == ArrowEffect.neon ? CanvasPainter.neonLoops : 1;
+      final wrapped = await effect(e, 0.2 + loop);
+      expect(differing(a, wrapped), 0, reason: 'phase ${0.2 + loop} is phase 0.2: the loop is seamless');
       final again = await effect(e, 0.2);
       expect(differing(a, again), 0, reason: 'the same phase always draws the same frame');
     });
   }
+
+  test('Neon breathes three times slower than the march loop; the other effects keep one breath per loop', () async {
+    expect(CanvasPainter.neonLoops, 3);
+    // one march loop (0.8 s in the editor) is a third of a breath: 2.4 s a breath
+    final start = await effect(ArrowEffect.neon, 0);
+    expect(differing(start, await effect(ArrowEffect.neon, 1)), greaterThan(150), reason: 'not back after one loop');
+    expect(differing(start, await effect(ArrowEffect.neon, 2)), greaterThan(150), reason: 'not back after two loops');
+    expect(differing(start, await effect(ArrowEffect.neon, 3)), 0, reason: 'back after three loops: one whole breath');
+    // the glow is the same at the same point of the breath, and peaks a quarter in (0.75 loops), lowest at 2.25
+    final glowAt = <double, int>{};
+    for (final p in [0.0, 0.75, 1.5, 2.25]) {
+      final px = await effect(ArrowEffect.neon, p);
+      glowAt[p] = px.where((c) => c != 0xFF403020).length; // not the background (rgba 20 30 40 read as a uint32)
+    }
+    expect(glowAt[0.75]!, greaterThan(glowAt[0]!), reason: 'the glow swells for the first 0.75 loops (a quarter breath)');
+    expect(glowAt[0.75]!, greaterThan(glowAt[1.5]!));
+    expect(glowAt[2.25]!, lessThan(glowAt[1.5]!), reason: 'and is dimmest at three quarters of the breath');
+    expect(glowAt[2.25]!, lessThan(glowAt[0]!));
+    // the other effects: unchanged, a loop of 1
+    for (final e in effects.where((e) => e != ArrowEffect.neon)) {
+      expect(differing(await effect(e, 0.3), await effect(e, 1.3)), 0, reason: '${e.label} still loops once per march loop');
+      expect(differing(await effect(e, 0.3), await effect(e, 0.8)), greaterThan(0), reason: '${e.label} moves');
+    }
+  });
+
+  test('a breath of Neon is seamless: the frame after the last is the first', () async {
+    const steps = 60; // the editor's ticker: 20 steps per loop, three loops
+    final first = await effect(ArrowEffect.neon, 0);
+    final last = await effect(ArrowEffect.neon, (steps - 1) / 20);
+    final next = await effect(ArrowEffect.neon, steps / 20);
+    expect(differing(next, first), 0);
+    expect(differing(last, first), greaterThan(0), reason: 'the last step is still short of the start');
+    // the step to the loop point is no bigger than any other step (no jump)
+    final steps1 = await effect(ArrowEffect.neon, 1 / 20);
+    final normal = differing(first, steps1), wrap = differing(last, next);
+    expect(wrap, lessThanOrEqualTo(normal * 2 + 50));
+  });
+
+  test('the export loop holds one whole Neon breath, and is unchanged without one', () async {
+    final base = await () async {
+      final rec = ui.PictureRecorder();
+      Canvas(rec).drawRect(const Rect.fromLTWH(0, 0, 400, 200), Paint()..color = Colors.white);
+      return rec.endRecording().toImage(400, 200);
+    }();
+    CanvasState with_(ArrowEffect e) => CanvasState(
+        image: base, annotations: [plain.copyWith(arrowStyle: plain.arrowStyle.copyWith(effect: e))]);
+    expect(BuildUpGif.marchLoops(with_(ArrowEffect.neon)), 3);
+    for (final e in effects.where((e) => e != ArrowEffect.neon)) {
+      expect(BuildUpGif.marchLoops(with_(e)), 1, reason: e.label);
+    }
+    expect(BuildUpGif.marchLoops(CanvasState(image: base, annotations: [plain])), 1);
+    // the loop's length in frames: three times as long with Neon, the same as before without
+    final old = BuildUpGif.fps;
+    addTearDown(() => BuildUpGif.fps = old);
+    BuildUpGif.fps = 15;
+    final neon = await ui.instantiateImageCodec(await BuildUpGif.renderMarching(with_(ArrowEffect.neon)));
+    final fire = await ui.instantiateImageCodec(await BuildUpGif.renderMarching(with_(ArrowEffect.fire)));
+    expect(neon.frameCount, 3 * fire.frameCount, reason: '2.4 s against 0.8 s');
+    expect(fire.frameCount, (BuildUpGif.marchCycle * 15).round());
+    expect(neon.frameCount, 36);
+    // the build-up GIF's final hold already runs three loops (3 s - 0.6 s = 2.4 s): one whole breath, length unchanged
+    expect((BuildUpGif.finalHold - BuildUpGif.pauseAfterEach).inMilliseconds,
+        (BuildUpGif.marchCycle * 1000 * CanvasPainter.neonLoops).round());
+  });
 
   test('drawAnnotation and drawPartial route an arrow or line with an effect to it', () async {
     for (final e in effects) {

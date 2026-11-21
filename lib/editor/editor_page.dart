@@ -417,6 +417,7 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   Timer? _antsTimer;
   /// Marching Ants lines run while any annotation uses them (one dash cycle every 0.8 s).
   final _march = ValueNotifier<double>(0);
+  int _marchStep = 0;
   Timer? _marchTimer;
   /// Play: the annotation being watched appearing (drawn on, as the string art of its tangents or traced by Fourier circles),
   /// and how far (0…1).
@@ -765,7 +766,10 @@ class EditorPageState extends State<EditorPage> implements PanelHost {
   void _syncMarch(CanvasState state) {
     final needed = _cropRect != null || BuildUpGif.marches(state);
     if (needed && _marchTimer == null) {
-      _marchTimer = Timer.periodic(const Duration(milliseconds: 40), (_) => _march.value = (_march.value + 0.05) % 1);
+      // 20 steps a loop of 0.8 s; the phase runs on for CanvasPainter.neonLoops loops (Neon's slow breath), counted in whole
+      // steps so it never drifts
+      _marchTimer = Timer.periodic(const Duration(milliseconds: 40),
+          (_) => _march.value = (++_marchStep % (20 * CanvasPainter.neonLoops)) / 20);
     } else if (!needed && _marchTimer != null) {
       _marchTimer!.cancel();
       _marchTimer = null;
@@ -3951,7 +3955,7 @@ class _PreviewPainter extends CustomPainter {
       final r = Rect.fromLTRB(cropRect!.left * scale, cropRect!.top * scale, cropRect!.right * scale, cropRect!.bottom * scale);
       canvas.drawPath(Path()..addRect(frame)..addRect(r)..fillType = PathFillType.evenOdd,
           Paint()..color = Colors.black.withValues(alpha: 0.45));
-      _border(canvas, r, march.value); // marching-ants dotted outline
+      _border(canvas, r, march.value % 1); // marching-ants dotted outline
       for (final h in CanvasPainter.rectHandles(cropRect!)) {
         final c = Offset(h.dx * scale, h.dy * scale);
         canvas.drawCircle(c, 5, Paint()..color = Colors.white);

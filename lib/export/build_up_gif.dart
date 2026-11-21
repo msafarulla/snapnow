@@ -134,17 +134,23 @@ class BuildUpGif {
   static bool marches(CanvasState s) => s.annotations.any((a) =>
       a.styleKind != null && (a.arrowStyle.pattern.marches || a.arrowStyle.snake || a.arrowStyle.effect != ArrowEffect.none));
 
+  /// March loops one seamless animation of [s] takes: [CanvasPainter.neonLoops] when a Neon arrow is in it (one whole breath),
+  /// otherwise 1; the other effects, the ants and the snake just repeat inside it.
+  static int marchLoops(CanvasState s) => s.annotations.any((a) => a.styleKind != null && a.arrowStyle.effect == ArrowEffect.neon)
+      ? CanvasPainter.neonLoops
+      : 1;
+
   /// The finished picture with only its Marching Ants moving: one dash cycle that loops seamlessly
-  /// (what ⌘C copies when the markup has them).
+  /// (what ⌘C copies when the markup has them); with a Neon arrow, [marchLoops] cycles so a whole breath fits.
   static Future<Uint8List> renderMarching(CanvasState s) async {
     final k = outputScale(s);
     final w = math.max(1, (s.image.width * k).round()), h = math.max(1, (s.image.height * k).round());
     final march = ValueNotifier<double>(0);
-    final n = (marchCycle * fps).round(), delay = 1000 ~/ fps;
+    final n = (marchCycle * fps).round() * marchLoops(s), delay = 1000 ~/ fps;
     final frames = <GifFrame>[];
     Uint32List? previous;
     for (var i = 0; i < n; i++) {
-      march.value = i / n;
+      march.value = marchLoops(s) * i / n;
       final pixels = await _snapshot(s, null, march, k, w, h); // null = everything shown
       final changed = previous == null ? null : _changedRect(previous, pixels, w, h);
       if (previous == null) {
@@ -179,7 +185,7 @@ class BuildUpGif {
     if (!marches(s)) return hold(rest);
     final n = rest.inMilliseconds * fps ~/ 1000, step = Duration(microseconds: rest.inMicroseconds ~/ n);
     for (var i = 1; i <= n; i++) {
-      march.value = (i / fps / marchCycle) % 1;
+      march.value = (i / fps / marchCycle) % marchLoops(s);
       await frame(step);
     }
     march.value = 0;
