@@ -34,7 +34,8 @@ void main() {
       Canvas(rec).drawRect(Offset.zero & size, Paint()..color = const Color(0xFF1B1D2A));
       final base = await rec.endRecording().toImage(size.width.toInt(), size.height.toInt());
       final r = ui.PictureRecorder();
-      // (1.87.4: the Neon glow is a quarter dimmer on purpose, so the golden was redrawn for its two rows only.)
+      // (1.87.4: the Neon glow is a quarter dimmer on purpose, so the golden was redrawn for its two rows only.
+      // 1.88.1: a dot, circle, square, diamond or bar at the START is drawn at 0.5 size (1.88.2) - redrawn for those tails only.)
       // Neon now breathes once per three march loops (1.87.3), so its two rows are drawn at phase 0.9, the same point of its
       // breath as phase 0.3 was in 1.86.1; everything else is at 0.3, as recorded.
       final state = CanvasState(image: base, annotations: anns);

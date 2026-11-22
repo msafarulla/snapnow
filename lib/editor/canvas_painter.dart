@@ -464,6 +464,13 @@ class CanvasPainter extends CustomPainter {
 
   /// A head at `tip`, pointing away from `from`. `trim` is where the body stops so its cap hides under the head;
   /// `back` is how far behind the tip the head's rearmost edge is (where a marching body stops instead).
+  /// How much smaller a marker at the start of an arrow is drawn (1.88.1: "start of the arrow shapes are too big"): a dot,
+  /// circle, square, diamond or bar at the tail marks where the arrow comes from and should not compete with the head, so
+  /// it is drawn at half size (0.7 in 1.88.1, 0.5 since 1.88.2). The same shape at both ends (a dot-to-dot line) and pointed heads (a two-headed
+  /// arrow) stay full size, so both ends match.
+  static double tailScale(ArrowHead start, ArrowHead end) =>
+      start != end && const {ArrowHead.dot, ArrowHead.circle, ArrowHead.square, ArrowHead.diamond, ArrowHead.bar}.contains(start) ? 0.5 : 1.0;
+
   static _Head _head(ArrowHead kind, Offset tip, Offset from, double w, double k) {
     final u = _unit(from, tip);
     final n = Offset(-u.dy, u.dx);
@@ -656,7 +663,7 @@ class CanvasPainter extends CustomPainter {
       final reach = headLength * size;
       ts = toward(pts.first, towardStart, reach);
       te = toward(pts.last, towardEnd, total - reach);
-      if (!_overTail(m, lw, reach, _head(start, pts.first, ts, headW ?? w, k * size), true) &&
+      if (!_overTail(m, lw, reach, _head(start, pts.first, ts, headW ?? w, k * size * tailScale(start, end)), true) &&
           !_overTail(m, lw, reach, _head(end, pts.last, te, headW ?? w, k * size), false)) {
         break;
       }
@@ -745,7 +752,7 @@ class CanvasPainter extends CustomPainter {
     final short = _shortArrow(pts, tangents, (firstC1 - a).distance > 0.5 ? firstC1 : segs.first.$4,
         (lastC2 - b).distance > 0.5 ? lastC2 : lastA, full, w, start: style.start, end: style.end, k: style.headSize.scale);
     final k = style.headSize.scale * short.size;
-    final start = _head(style.start, a, short.towardStart, w, k), end = _head(style.end, b, short.towardEnd, w, k);
+    final start = _head(style.start, a, short.towardStart, w, k * tailScale(style.start, style.end)), end = _head(style.end, b, short.towardEnd, w, k);
     final lw = w * short.thin, entry = _entry(end, lw);
     final line = _plainBody(pts, tangents, short, start, end, lw) ?? _curvePath([start.trim, ...pts.sublist(1, pts.length - 1), end.trim], tangents);
     return (line: line, curve: _curvePath(pts, tangents), head: end.path, tip: b, axis: _unit(short.towardEnd, b), entry: entry,
@@ -778,7 +785,7 @@ class CanvasPainter extends CustomPainter {
       end = _Head(end.path, filled: false, lineWidth: math.max(headW, taperFull * 0.85), trim: b - u * (taperFull * 0.5),
           back: end.back, hollow: true);
     }
-    final start = _head(style.start, a, towardStart, w, k);
+    final start = _head(style.start, a, towardStart, w, k * tailScale(style.start, style.end));
     w *= short.thin; // a short arrow's line is thinner (its heads keep their size from the full width)
 
     // The body runs between the trimmed ends (hidden under the heads), through the same bend points. A marching
@@ -848,7 +855,7 @@ class CanvasPainter extends CustomPainter {
     final towardStart = (firstC1 - a).distance > 0.5 ? firstC1 : segs.first.$4;
     final k = style.headSize.scale;
     final end = _head(style.end, b, towardEnd, w * 1.2, k);
-    final start = _head(style.start, a, towardStart, w * 1.2, k);
+    final start = _head(style.start, a, towardStart, w * 1.2, k * tailScale(style.start, style.end));
     final body = [start.trim, ...pts.sublist(1, pts.length - 1), end.trim];
     final centerline = _curvePath(body, tangents);
     final ph = (phase ?? _marchNow) % 1;
@@ -909,7 +916,7 @@ class CanvasPainter extends CustomPainter {
         start: style.start, end: style.end, k: style.headSize.scale);
     final towardEnd = short.towardEnd, towardStart = short.towardStart;
     final k = style.headSize.scale * short.size;
-    final start = _head(style.start, a, towardStart, w, k), end = _head(style.end, b, towardEnd, w, k);
+    final start = _head(style.start, a, towardStart, w, k * tailScale(style.start, style.end)), end = _head(style.end, b, towardEnd, w, k);
     w *= short.thin; // a short arrow's line (and the effect along it) is thinner; its heads keep their size
     // The line is the arrow's own curve, cut by length: under a filled head (a swept head's notch included) it stops where
     // the plain arrow's body does, so it meets the head with no gap; a see-through head (outlined triangle, circle, open
