@@ -156,7 +156,6 @@ final class PublishDefaults {
     private var readStamp: String?                      // the file's modification time and size when it was read last
     private var retryWork: DispatchWorkItem?
     private var retries = 0
-    private var lastToast = Date.distantPast
     private var napGuard: NSObjectProtocol?
 
     /// Empty = the feature is off.
@@ -500,11 +499,7 @@ final class PublishDefaults {
         if touched.contains("toolbarTools") { NotificationCenter.default.post(name: ToolbarPrefs.changed, object: nil) }
         NotificationCenter.default.post(name: Self.changed, object: nil)
         SnapLiteNative.shared?.invoke("defaultsChanged", r.applied)   // the editor reads its settings again
-        // one toast for a run of publishes (someone adjusting settings on the other Mac), not one per change
-        if Date().timeIntervalSince(lastToast) > 20 {
-            Toast.show("Defaults updated from \(p.mac)", symbol: "arrow.triangle.2.circlepath")
-        }
-        lastToast = Date()
+        // no on-screen message for an applied publish (1.88.3: it interrupted work on every Mac); Settings shows when and from where
         // what this Mac holds now is what was published: not a change of its own. Again once the editor has settled.
         var settled = currentValues()
         if let old = baseline { for k in mine { if let v = old[k] { settled[k] = v } else { settled.removeValue(forKey: k) } } }

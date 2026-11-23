@@ -1076,11 +1076,12 @@ class CanvasPainter extends CustomPainter {
   static void _electric(Canvas canvas, _Fx a, Color col, double w, double t) {
     // (a tighter glow on a patterned line, or its round ends would fill the gaps)
     final solid = a.pieces.isEmpty;
-    canvas.drawPath(a.body, _blurred(_stroke(col.withValues(alpha: 0.5), w * (solid ? 2.4 : 1.5)), w * (solid ? 1 : 0.55)));
-    canvas.drawPath(a.body, _stroke(col, w * 0.7));
+    // (no glow at all on a patterned line, 1.88.8: it read as haze round the dashes; the crackle is the effect there)
+    if (solid) canvas.drawPath(a.body, _blurred(_stroke(col.withValues(alpha: 0.5), w * 2.4), w));
+    canvas.drawPath(a.body, _stroke(col, w * (solid ? 0.7 : 0.55)));
     final light = Color.lerp(col, Colors.white, 0.55)!;
     for (final h in a.heads) {
-      _effectHead(canvas, h, col.withValues(alpha: 0.6), grow: w * 1.4, blur: w);
+      if (solid) _effectHead(canvas, h, col.withValues(alpha: 0.6), grow: w * 1.4, blur: w);
       _effectHead(canvas, h, light);
     }
     final seed = (t * 10 + 1e-6).floor();
@@ -1090,8 +1091,13 @@ class CanvasPainter extends CustomPainter {
       final len = p1 - p0;
       dash++;
       if (len < 4) continue;
-      final swing = math.min(w * 2.2, len * 0.15); // the bolt's reach; less on a tiny arrow or dash, so it stays a line
-      final count = math.max(2, (len / math.max(math.max(12.0, w * 1.8), len / 120)).round()), step = len / count;
+      // A dash is short: its bolt reaches further for its length and has more kinks than the whole-line one, so every
+      // dash visibly crackles (1.88.7); the haze round a patterned line is light, or the kinks drown in it
+      final swing = solid ? math.min(w * 2.2, len * 0.15) : math.min(w * 1.9, len * 0.3);
+      final count = solid
+          ? math.max(2, (len / math.max(math.max(12.0, w * 1.8), len / 120)).round())
+          : math.max(3, (len / math.max(4.0, w * 1.3)).round());
+      final step = len / count;
       for (var bolt = 0; bolt < 2; bolt++) {
         final p = Path();
         for (var i = 0; i <= count; i++) {
@@ -1099,7 +1105,7 @@ class CanvasPainter extends CustomPainter {
           final pt = a.at(d) + a.normal(d) * (_noise(seed + bolt * 31 + (dash - 1) * 17, i) * swing * ends);
           i == 0 ? p.moveTo(pt.dx, pt.dy) : p.lineTo(pt.dx, pt.dy);
         }
-        canvas.drawPath(p, _blurred(_stroke(col.withValues(alpha: 0.7), w * 0.9), w * 0.5));
+        if (solid) canvas.drawPath(p, _blurred(_stroke(col.withValues(alpha: 0.7), w * 0.9), w * 0.5));
         canvas.drawPath(p, _stroke(Colors.white, w * (bolt == 0 ? 0.32 : 0.2)));
       }
     }
@@ -1120,7 +1126,7 @@ class CanvasPainter extends CustomPainter {
       final v = Offset(math.cos(ang), math.sin(ang));
       final from = point + v * (w * 0.8), to = from + v * math.min(w * (1 + r.nextDouble() * 2.5), a.len * 0.3);
       canvas.drawLine(from, to, _stroke(Colors.white, w * 0.22));
-      canvas.drawLine(from, to, _blurred(_stroke(col.withValues(alpha: 0.6), w * 0.6), 2));
+      if (solid) canvas.drawLine(from, to, _blurred(_stroke(col.withValues(alpha: 0.6), w * 0.6), 2));
     }
   }
 
