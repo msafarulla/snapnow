@@ -1078,13 +1078,23 @@ class CanvasPainter extends CustomPainter {
     final solid = a.pieces.isEmpty;
     // (no glow at all on a patterned line, 1.88.8: it read as haze round the dashes; the crackle is the effect there)
     if (solid) canvas.drawPath(a.body, _blurred(_stroke(col.withValues(alpha: 0.5), w * 2.4), w));
-    canvas.drawPath(a.body, _stroke(col, w * (solid ? 0.7 : 0.55)));
+    if (solid) {
+      canvas.drawPath(a.body, _stroke(col, w * 0.7));
+    } else {
+      // (1.88.10 / 11) a dot stays a dot, at the line's full width and with no bolt; a dash is NOT drawn as a dash:
+      // its bolts alone stand in its place (user: "those dashes need to be gone for electric effect")
+      for (final (p0, p1) in a.pieces) {
+        if (p1 - p0 < 4) canvas.drawCircle(a.at((p0 + p1) / 2), w / 2, _fill(col));
+      }
+    }
     final light = Color.lerp(col, Colors.white, 0.55)!;
     for (final h in a.heads) {
       if (solid) _effectHead(canvas, h, col.withValues(alpha: 0.6), grow: w * 1.4, blur: w);
       _effectHead(canvas, h, light);
     }
     final seed = (t * 10 + 1e-6).floor();
+    // (1.88.12) on a pattern that has dots (dash-dot) the dashes crackle a little less, so the dots between them are not drowned
+    final calm = !solid && a.pieces.any((p) => p.$2 - p.$1 < 4) ? 0.72 : 1.0;
     // One pair of bolts per dash of the line's pattern (a solid line is one dash; a dot has none), pinned at its ends
     var dash = 0;
     for (final (p0, p1) in solid ? [(0.0, a.len)] : a.pieces) {
@@ -1093,10 +1103,11 @@ class CanvasPainter extends CustomPainter {
       if (len < 4) continue;
       // A dash is short: its bolt reaches further for its length and has more kinks than the whole-line one, so every
       // dash visibly crackles (1.88.7); the haze round a patterned line is light, or the kinks drown in it
-      final swing = solid ? math.min(w * 2.2, len * 0.15) : math.min(w * 1.9, len * 0.3);
+      // (1.88.13) much calmer on a dash: about half the reach of 1.88.12 and fewer kinks - a line that flickers, not a scribble
+      final swing = solid ? math.min(w * 2.2, len * 0.15) : math.min(w * 0.85, len * 0.13) * calm;
       final count = solid
           ? math.max(2, (len / math.max(math.max(12.0, w * 1.8), len / 120)).round())
-          : math.max(3, (len / math.max(4.0, w * 1.3)).round());
+          : math.max(3, (len / math.max(6.0, w * 2.2)).round());
       final step = len / count;
       for (var bolt = 0; bolt < 2; bolt++) {
         final p = Path();
@@ -1105,7 +1116,12 @@ class CanvasPainter extends CustomPainter {
           final pt = a.at(d) + a.normal(d) * (_noise(seed + bolt * 31 + (dash - 1) * 17, i) * swing * ends);
           i == 0 ? p.moveTo(pt.dx, pt.dy) : p.lineTo(pt.dx, pt.dy);
         }
-        if (solid) canvas.drawPath(p, _blurred(_stroke(col.withValues(alpha: 0.7), w * 0.9), w * 0.5));
+        if (solid) {
+          canvas.drawPath(p, _blurred(_stroke(col.withValues(alpha: 0.7), w * 0.9), w * 0.5));
+        } else {
+          // no glow on a dash: a crisp edge in the line's colour under the white, so the bolt reads on any picture
+          canvas.drawPath(p, _stroke(col, w * (bolt == 0 ? 0.75 : 0.5)));
+        }
         canvas.drawPath(p, _stroke(Colors.white, w * (bolt == 0 ? 0.32 : 0.2)));
       }
     }
@@ -1125,6 +1141,7 @@ class CanvasPainter extends CustomPainter {
       final ang = math.atan2(a.dir.dy, a.dir.dx) + (r.nextDouble() - 0.5) * 2.2;
       final v = Offset(math.cos(ang), math.sin(ang));
       final from = point + v * (w * 0.8), to = from + v * math.min(w * (1 + r.nextDouble() * 2.5), a.len * 0.3);
+      if (!solid) canvas.drawLine(from, to, _stroke(col, w * 0.5)); // crisp edge instead of a glow, as on the dashes
       canvas.drawLine(from, to, _stroke(Colors.white, w * 0.22));
       if (solid) canvas.drawLine(from, to, _blurred(_stroke(col.withValues(alpha: 0.6), w * 0.6), 2));
     }
