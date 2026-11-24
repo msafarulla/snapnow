@@ -154,6 +154,8 @@ class Native {
   static Future<void> openUrl(String url) => _call('openUrl', {'url': url});
   static Future<void> openPath(String path) => _call('openPath', {'path': path});
   static Future<void> activate() => _call('activate');
+  /// Centre the window on the display under the pointer, not the primary display (windowManager.center()).
+  static Future<void> centerOnActiveScreen() => _call('centerOnActiveScreen');
   /// Draw mode: the new session's empty glass is on screen in Flutter; the native side may now fade the window in.
   static Future<void> drawReady() => _call('drawReady');
   static Future<void> beep() => _call('beep');

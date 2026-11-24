@@ -265,6 +265,17 @@ final class SnapLiteNative {
     case "activate":
       NSApp.activate(ignoringOtherApps: true)
       result(nil)
+    case "centerOnActiveScreen":
+      // Centre the editor/library window on the display under the pointer (the one the user is working on),
+      // not the primary display that windowManager.center() always uses. Same screen-under-mouse rule as the rest.
+      if let window = NSApp.windows.first(where: { $0 is MainFlutterWindow }) {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+        let v = screen.visibleFrame
+        let size = window.frame.size
+        window.setFrameOrigin(NSPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2))
+      }
+      result(nil)
     case "drawReady":
       LiveDraw.shared.revealGlass()
       result(nil)

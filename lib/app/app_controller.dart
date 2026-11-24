@@ -95,8 +95,10 @@ class AppController with TrayListener, WindowListener {
       _sized = true;
       await windowManager.setMinimumSize(const Size(720, 480));
       await windowManager.setSize(initialWindowSize(await Native.screenVisibleSize()));
-      await windowManager.center();
     }
+    // Open on the display under the pointer (the screen being worked on), not the primary display that
+    // windowManager.center() always used. Only when opening fresh - an already-open window is left where it is.
+    if (!await windowManager.isVisible()) await Native.centerOnActiveScreen();
     await windowManager.show();
     await windowManager.focus();
     await Native.activate();
