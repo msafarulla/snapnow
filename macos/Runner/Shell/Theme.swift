@@ -8,7 +8,7 @@ extension NSColor {
 }
 
 enum AppearanceChoice: String, CaseIterable {
-    case glass, system, light, dark, tokyoNight
+    case glass, system, light, dark, tokyoNight, dracula, nord, gruvbox, catppuccin, oneDark
 
     var label: String {
         switch self {
@@ -17,6 +17,11 @@ enum AppearanceChoice: String, CaseIterable {
         case .light: return "Light"
         case .dark: return "Dark"
         case .tokyoNight: return "Tokyo Night"
+        case .dracula: return "Dracula"
+        case .nord: return "Nord"
+        case .gruvbox: return "Gruvbox"
+        case .catppuccin: return "Catppuccin"
+        case .oneDark: return "One Dark"
         }
     }
 }
@@ -60,6 +65,26 @@ struct Palette {
                                     highlight: NSColor(hex: 0x292E42), border: NSColor(hex: 0x2F334D), text: NSColor(hex: 0xC0CAF5),
                                     dimText: NSColor(hex: 0xA9B1D6), muted: NSColor(hex: 0x565F89), accent: NSColor(hex: 0x7AA2F7),
                                     onAccent: NSColor(hex: 0x1A1B26), isDark: true, monospaced: true)
+    static let dracula = Palette(background: NSColor(hex: 0x282A36), surface: NSColor(hex: 0x21222C), raised: NSColor(hex: 0x343746),
+                                 highlight: NSColor(hex: 0x3C3F51), border: NSColor(hex: 0x44475A), text: NSColor(hex: 0xF8F8F2),
+                                 dimText: NSColor(hex: 0xBCC0D8), muted: NSColor(hex: 0x6272A4), accent: NSColor(hex: 0xBD93F9),
+                                 onAccent: NSColor(hex: 0x282A36), isDark: true, monospaced: false)
+    static let nord = Palette(background: NSColor(hex: 0x2E3440), surface: NSColor(hex: 0x2B313B), raised: NSColor(hex: 0x3B4252),
+                              highlight: NSColor(hex: 0x434C5E), border: NSColor(hex: 0x3B4252), text: NSColor(hex: 0xECEFF4),
+                              dimText: NSColor(hex: 0xC0C8D8), muted: NSColor(hex: 0x6B7489), accent: NSColor(hex: 0x88C0D0),
+                              onAccent: NSColor(hex: 0x2E3440), isDark: true, monospaced: false)
+    static let gruvbox = Palette(background: NSColor(hex: 0x282828), surface: NSColor(hex: 0x1D2021), raised: NSColor(hex: 0x3C3836),
+                                 highlight: NSColor(hex: 0x504945), border: NSColor(hex: 0x504945), text: NSColor(hex: 0xEBDBB2),
+                                 dimText: NSColor(hex: 0xC4B596), muted: NSColor(hex: 0x928374), accent: NSColor(hex: 0xFE8019),
+                                 onAccent: NSColor(hex: 0x282828), isDark: true, monospaced: false)
+    static let catppuccin = Palette(background: NSColor(hex: 0x1E1E2E), surface: NSColor(hex: 0x181825), raised: NSColor(hex: 0x313244),
+                                    highlight: NSColor(hex: 0x45475A), border: NSColor(hex: 0x313244), text: NSColor(hex: 0xCDD6F4),
+                                    dimText: NSColor(hex: 0xBAC2DE), muted: NSColor(hex: 0x6C7086), accent: NSColor(hex: 0xCBA6F7),
+                                    onAccent: NSColor(hex: 0x1E1E2E), isDark: true, monospaced: false)
+    static let oneDark = Palette(background: NSColor(hex: 0x282C34), surface: NSColor(hex: 0x21252B), raised: NSColor(hex: 0x323842),
+                                 highlight: NSColor(hex: 0x3E4451), border: NSColor(hex: 0x3E4451), text: NSColor(hex: 0xABB2BF),
+                                 dimText: NSColor(hex: 0x9199A6), muted: NSColor(hex: 0x5C6370), accent: NSColor(hex: 0x61AFEF),
+                                 onAccent: NSColor(hex: 0x282C34), isDark: true, monospaced: false)
 }
 
 /// The app's colors and font, chosen in Settings › Appearance. Views read these at draw time,
@@ -94,6 +119,11 @@ enum Theme {
         case .light: return .light
         case .dark: return .dark
         case .tokyoNight: return .tokyoNight
+        case .dracula: return .dracula
+        case .nord: return .nord
+        case .gruvbox: return .gruvbox
+        case .catppuccin: return .catppuccin
+        case .oneDark: return .oneDark
         case .system:
             return systemIsDark ? .dark : .light
         }
@@ -104,7 +134,7 @@ enum Theme {
         switch choice {
         case .glass, .system: return nil
         case .light: return NSAppearance(named: .aqua)
-        case .dark, .tokyoNight: return NSAppearance(named: .darkAqua)
+        case .dark, .tokyoNight, .dracula, .nord, .gruvbox, .catppuccin, .oneDark: return NSAppearance(named: .darkAqua)
         }
     }
 

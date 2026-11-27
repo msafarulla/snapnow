@@ -122,6 +122,59 @@ class SnapTheme {
     ),
   );
 
+  // --- More dark themes: the same accent/surface recipe as Tokyo Night via _dark(), proportional font. Keyed in byChoice. ---
+  static final dracula = _dark(accent: 0xBD93F9, onAccent: 0x282A36, accentContainer: 0x3C3357, onAccentContainer: 0xE9DDFB,
+      secondary: 0xFF79C6, bg: 0x282A36, bars: 0x21222C, lowest: 0x191A21, raised: 0x343746, hover: 0x3C3F51, line: 0x44475A,
+      text: 0xF8F8F2, dimText: 0xBCC0D8, outline: 0x6272A4, outlineVariant: 0x3B3E4F, error: 0xFF5555);
+  static final nord = _dark(accent: 0x88C0D0, onAccent: 0x2E3440, accentContainer: 0x3B4D55, onAccentContainer: 0xD5EAEF,
+      secondary: 0x81A1C1, bg: 0x2E3440, bars: 0x2B313B, lowest: 0x21262E, raised: 0x3B4252, hover: 0x434C5E, line: 0x4C566A,
+      text: 0xECEFF4, dimText: 0xC0C8D8, outline: 0x6B7489, outlineVariant: 0x3B4252, error: 0xBF616A);
+  static final gruvbox = _dark(accent: 0xFE8019, onAccent: 0x282828, accentContainer: 0x543B26, onAccentContainer: 0xFCE2CC,
+      secondary: 0xFABD2F, bg: 0x282828, bars: 0x232323, lowest: 0x1D2021, raised: 0x3C3836, hover: 0x504945, line: 0x665C54,
+      text: 0xEBDBB2, dimText: 0xC4B596, outline: 0x928374, outlineVariant: 0x3C3836, error: 0xFB4934);
+  static final catppuccin = _dark(accent: 0xCBA6F7, onAccent: 0x1E1E2E, accentContainer: 0x3A3357, onAccentContainer: 0xEADDFD,
+      secondary: 0x89B4FA, bg: 0x1E1E2E, bars: 0x181825, lowest: 0x11111B, raised: 0x313244, hover: 0x45475A, line: 0x585B70,
+      text: 0xCDD6F4, dimText: 0xBAC2DE, outline: 0x6C7086, outlineVariant: 0x313244, error: 0xF38BA8);
+  static final oneDark = _dark(accent: 0x61AFEF, onAccent: 0x282C34, accentContainer: 0x26425C, onAccentContainer: 0xD4E8FA,
+      secondary: 0xC678DD, bg: 0x282C34, bars: 0x21252B, lowest: 0x1B1E24, raised: 0x323842, hover: 0x3E4451, line: 0x4B5263,
+      text: 0xABB2BF, dimText: 0x9199A6, outline: 0x5C6370, outlineVariant: 0x3A404B, error: 0xE06C75);
+
+  /// The named dark themes that Settings > Theme can choose (besides the built-in Light / Dark / Glass / System).
+  static final Map<String, ThemeData> byChoice = {
+    'tokyoNight': tokyoNight, 'dracula': dracula, 'nord': nord, 'gruvbox': gruvbox, 'catppuccin': catppuccin, 'oneDark': oneDark,
+  };
+
+  /// A dark theme from a compact set of role colors (each 0xRRGGBB) - the same recipe as the hand-written themes above.
+  static ThemeData _dark({
+    required int accent, required int onAccent, required int accentContainer, required int onAccentContainer, required int secondary,
+    required int bg, required int bars, required int lowest, required int raised, required int hover, required int line,
+    required int text, required int dimText, required int outline, required int outlineVariant, required int error, String? font,
+  }) {
+    Color c(int v) => Color(0xFF000000 | v);
+    return _build(
+      brightness: Brightness.dark,
+      fontFamily: font,
+      scheme: ColorScheme.dark(
+        primary: c(accent), onPrimary: c(onAccent),
+        primaryContainer: c(accentContainer), onPrimaryContainer: c(onAccentContainer),
+        secondary: c(secondary), onSecondary: c(onAccent),
+        surface: c(bg), onSurface: c(text), onSurfaceVariant: c(dimText),
+        surfaceBright: c(line),
+        surfaceContainerLowest: c(lowest), surfaceContainerLow: c(bars), surfaceContainer: c(bg),
+        surfaceContainerHigh: c(raised), surfaceContainerHighest: c(hover),
+        outline: c(outline), outlineVariant: c(outlineVariant),
+        error: c(error), onError: c(onAccent),
+        inverseSurface: c(text), onInverseSurface: c(bg), shadow: Colors.black,
+      ),
+      chrome: SnapChrome(
+        backdrop: c(lowest), card: Color(0xF2000000 | bg), border: Color(0x2E000000 | text),
+        shadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 22, offset: Offset(0, 8)),
+            BoxShadow(color: Color(0x33000000), blurRadius: 3, offset: Offset(0, 1))],
+        control: c(hover), controlBorder: c(line), raised: c(line),
+      ),
+    );
+  }
+
   static ThemeData _build({required Brightness brightness, required ColorScheme scheme, required SnapChrome chrome, String? fontFamily}) {
     final dark = brightness == Brightness.dark;
     final body = TextStyle(fontFamily: fontFamily, color: scheme.onSurface, fontSize: 13, height: 1.3, letterSpacing: -0.1);

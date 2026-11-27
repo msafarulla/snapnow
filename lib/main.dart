@@ -19,18 +19,19 @@ class SnapLiteApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Follows Settings › Appearance live: Light / Dark / Tokyo Night as chosen; Glass and Match System follow the Mac
+    // Follows Settings › Appearance live: Light / Dark or a named dark theme (Tokyo Night, Dracula, Nord, Gruvbox,
+    // Catppuccin, One Dark) as chosen; Glass and Match System follow the Mac.
     return ValueListenableBuilder<String>(
       valueListenable: AppController.instance.appearance,
       builder: (context, choice, _) => MaterialApp(
         title: 'SnapNow',
         debugShowCheckedModeBanner: false,
         theme: SnapTheme.light,
-        darkTheme: choice == 'tokyoNight' ? SnapTheme.tokyoNight : SnapTheme.dark,
+        darkTheme: SnapTheme.byChoice[choice] ?? SnapTheme.dark,
         themeMode: switch (choice) {
           'light' => ThemeMode.light,
-          'dark' || 'tokyoNight' => ThemeMode.dark,
-          _ => ThemeMode.system,
+          'glass' || 'system' => ThemeMode.system,
+          _ => ThemeMode.dark,
         },
         home: LibraryPage(key: AppController.instance.libraryKey),
       ),
