@@ -53,6 +53,7 @@ enum Prefs {
     static let copyImage = "copyAfterCapture"
     static let microphone = "recordMicrophone"
     static let systemAudio = "recordSystemAudio"            // on by default: the computer's sound goes into recordings
+    static let echoCancel = "recordEchoCancel"              // on by default, no setting: with both sounds, the microphone has the echo taken out
     static let transcribe = "transcribeRecordings"          // on by default: a transcript after every recording
     static let transcriptLanguage = "transcriptLanguage"    // a language identifier; empty = the system language
     /// Option+click anywhere shows the pointing hand (same as my browser automation). Default on.

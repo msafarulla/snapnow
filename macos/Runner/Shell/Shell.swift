@@ -519,9 +519,18 @@ final class Shell: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private func handleCapture(_ url: URL) {
         let config = CaptureConfig.current
         Renderer.applyEffect(config.effect, to: url)
-        if UserDefaults.standard.bool(forKey: Prefs.wmEnabled) { Watermark.apply(to: url) } // user's text/image watermark
-        if Prefs.onByDefault(Prefs.stampTime) { CaptureStamp.apply(to: url) } // date & time, bottom-right (on top)
-        if Prefs.onByDefault(Prefs.roundCorners) { RoundCorners.apply(to: url) } // rounded corners, last so it clips all
+        // watermark, date and time stamp, rounded corners: one read and one write of the file (CapturePostProcess), and not on
+        // the main thread, so the menu bar and the shortcuts answer while a big screenshot is being finished
+        let steps = CapturePostProcess.steps()
+        guard !steps.isEmpty else { finishCapture(url, config); return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            CapturePostProcess.run(steps, on: url)
+            DispatchQueue.main.async { self?.finishCapture(url, config) }
+        }
+    }
+
+    /// The capture is final: the Library hears of it, then the after-capture settings (share, clipboard, editor).
+    private func finishCapture(_ url: URL, _ config: CaptureConfig) {
         SnapLiteNative.shared?.invoke("capturesChanged")
         switch config.share {
         case .none: break

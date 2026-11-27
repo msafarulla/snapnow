@@ -82,6 +82,7 @@ final class PublishDefaults {
         // Recording and transcripts
         .bool("recordMicrophone"),
         .bool("recordSystemAudio"),
+        .bool("recordEchoCancel"),
         .choice("recordingQuality", RecordingQuality.allCases.map(\.rawValue)),
         .bool("transcribeRecordings"),
         .text("transcriptLanguage"),                           // a language this Mac cannot transcribe shows in Settings as chosen

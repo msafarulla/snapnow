@@ -156,14 +156,24 @@ final class RegionCapture {
         Task { @MainActor in
             guard await capture.freezeWithScreenCaptureKit(),
                   let f = capture.frozen.first(where: { $0.screen.frame.contains(CGPoint(x: r.midX, y: r.midY)) }) else { completion(nil); return }
-            completion(capture.save(r.intersection(f.screen.frame), from: f) ? url : nil)
+            let saving = CFAbsoluteTimeGetCurrent()
+            let saved = capture.save(r.intersection(f.screen.frame), from: f)
+            Self.timings["save"] = (CFAbsoluteTimeGetCurrent() - saving) * 1000
+            completion(saved ? url : nil)
         }
     }
+
+    /// How long the last freeze took, step by step, in milliseconds (the test control's status.json "lastFreeze").
+    static var timings: [String: Double] = [:]
 
     /// Each screen's display by ID, at its full pixel size.
     @MainActor private func freezeWithScreenCaptureKit() async -> Bool {
         frozen = []
+        let began = CFAbsoluteTimeGetCurrent()
+        var timings: [String: Double] = ["screens": Double(NSScreen.screens.count)]
+        defer { Self.timings = timings; Self.timings["total"] = (CFAbsoluteTimeGetCurrent() - began) * 1000 }
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return false }
+        timings["content"] = (CFAbsoluteTimeGetCurrent() - began) * 1000
         let hidden = Recorder.shared.overlayWindowIDs           // a screen recording's pill and border are not captured
         let recorderWindows = content.windows.filter { hidden.contains($0.windowID) }
         for screen in NSScreen.screens {
@@ -174,9 +184,11 @@ final class RegionCapture {
             config.height = Int(screen.frame.height * screen.backingScaleFactor)
             config.showsCursor = false
             config.captureResolution = .best
+            let shot = CFAbsoluteTimeGetCurrent()
             guard let image = try? await SCScreenshotManager.captureImage(
                 contentFilter: SCContentFilter(display: display, excludingWindows: recorderWindows), configuration: config),
                   !Self.isBlank(image) else { frozen = []; return false }
+            timings["capture.\(frozen.count)"] = (CFAbsoluteTimeGetCurrent() - shot) * 1000
             frozen.append(Frozen(screen: screen, image: image))
         }
         return !frozen.isEmpty
@@ -767,189 +779,5 @@ private final class RegionView: NSView {
         case 1: capture.scrollPicked()                  // S: scrolling capture of the hovered window / last area
         default: super.keyDown(with: event)
         }
-    }
-}
-
-/// Burns the capture's date & time into the bottom-right corner of the saved PNG (toggle: Prefs.stampTime).
-/// Format: yyyy-MM-dd HH:mm, local time; a translucent pill keeps it legible on any background.
-enum CaptureStamp {
-    static func apply(to url: URL) {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return }
-        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
-        let dpi = (props?[kCGImagePropertyDPIWidth] as? CGFloat) ?? 72   // Retina captures carry 144
-        let scale = max(1, dpi / 72)
-        guard let stamped = draw(on: image, scale: scale),
-              let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else { return }
-        CGImageDestinationAddImage(dest, stamped, [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi] as CFDictionary)
-        CGImageDestinationFinalize(dest)
-    }
-
-    private static func draw(on image: CGImage, scale: CGFloat) -> CGImage? {
-        let w = image.width, h = image.height
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
-
-        let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd HH:mm"
-        let text = df.string(from: Date()) as NSString
-        // Light and subtle (no pill, no shadow); the colour adapts to the pixels under it so it stays legible
-        // on a white capture as well as a dark one.
-        // Hug the bottom-right corner very tightly (user, 2026-11-09): a couple of points from the right edge, and the digits'
-        // baseline almost on the bottom edge (the text box's descender space is pulled back below).
-        let margin = 3 * scale
-        // Monospaced digits read cleanly as a timestamp and keep an even width.
-        func measure(_ s: CGFloat) -> CGSize { text.size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: s, weight: .medium)]) }
-        var fontSize = max(11 * scale, CGFloat(h) * 0.013)
-        var ts = measure(fontSize)
-        // Shrink the stamp so it always fits inside the capture instead of overflowing a small image (its left
-        // end getting clipped) or swamping it. On an image too small to carry it legibly, drop it entirely.
-        let avail = CGFloat(w) - margin * 2
-        if ts.width > avail, ts.width > 0 { fontSize *= avail / ts.width; ts = measure(fontSize) }
-        guard fontSize >= 7 * scale, ts.height <= CGFloat(h) * 0.5 else { return ctx.makeImage() }
-        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .medium)
-        let bottomGap = 1.5 * scale
-        let baselineY = bottomGap + font.descender    // descender is negative: digits sit ~1.5pt above the bottom edge
-        let region = CGRect(x: CGFloat(w) - ts.width - margin, y: CGFloat(h) - ts.height - bottomGap, width: ts.width, height: ts.height)
-        let onLight = averageLuminance(of: image, in: region) > 0.6
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: (onLight ? NSColor.black : NSColor.white).withAlphaComponent(0.6),
-        ]
-        let ns = NSGraphicsContext(cgContext: ctx, flipped: false)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = ns
-        text.draw(at: CGPoint(x: CGFloat(w) - ts.width - margin, y: baselineY), withAttributes: attrs)
-        NSGraphicsContext.restoreGraphicsState()
-        return ctx.makeImage()
-    }
-
-    /// Average brightness (0…1) of a region, by shrinking it to one pixel; picks the stamp's contrast colour.
-    private static func averageLuminance(of image: CGImage, in rect: CGRect) -> CGFloat {
-        let r = rect.integral.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        guard r.width >= 1, r.height >= 1, let crop = image.cropping(to: r) else { return 1 }
-        var px = [UInt8](repeating: 0, count: 4)
-        guard let c = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 1 }
-        c.interpolationQuality = .medium
-        c.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-        return (0.299 * CGFloat(px[0]) + 0.587 * CGFloat(px[1]) + 0.114 * CGFloat(px[2])) / 255
-    }
-}
-
-/// A user-configured watermark (their own text and/or image) stamped on captures per the Watermark settings:
-/// placement (bottom-right / centred / tiled) and opacity. Gated by Prefs.wmEnabled; written atomically.
-enum Watermark {
-    static func apply(to url: URL) {
-        let d = UserDefaults.standard
-        let text = (d.string(forKey: Prefs.wmText) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let imgPath = d.string(forKey: Prefs.wmImage) ?? ""
-        let wm = imgPath.isEmpty ? nil : NSImage(contentsOfFile: imgPath)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        guard !text.isEmpty || wm != nil else { return }
-        let placement = d.string(forKey: Prefs.wmPlacement) ?? "bottomRight"
-        let opacity = max(0.05, min(1, CGFloat(Prefs.wmOpacityValue) / 100))
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let base = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return }
-        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
-        let dpi = (props?[kCGImagePropertyDPIWidth] as? CGFloat) ?? 72
-        let scale = max(1, dpi / 72)
-        guard let out = render(base, scale: scale, text: text, wm: wm, placement: placement, opacity: opacity) else { return }
-        // Atomic: write a temp file, then replace — a failed render/encode never loses the capture.
-        let tmp = url.deletingLastPathComponent().appendingPathComponent(".wm-\(UUID().uuidString).png")
-        guard let dest = CGImageDestinationCreateWithURL(tmp as CFURL, "public.png" as CFString, 1, nil) else { return }
-        CGImageDestinationAddImage(dest, out, [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi] as CFDictionary)
-        guard CGImageDestinationFinalize(dest) else { try? FileManager.default.removeItem(at: tmp); return }
-        _ = try? FileManager.default.replaceItemAt(url, withItemAt: tmp)
-    }
-
-    private static func render(_ base: CGImage, scale: CGFloat, text: String, wm: CGImage?, placement: String, opacity: CGFloat) -> CGImage? {
-        let W = CGFloat(base.width), H = CGFloat(base.height)
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: base.width, height: base.height, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        ctx.draw(base, in: CGRect(x: 0, y: 0, width: W, height: H))
-        let g = NSGraphicsContext(cgContext: ctx, flipped: false)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = g
-        // Soft-light blend: the watermark melts into the image (gently lightening/darkening it) instead of
-        // floating on top, so it reads as a subtle mark rather than pulling the eye.
-        ctx.saveGState()
-        ctx.setBlendMode(.softLight)
-
-        // One watermark block centred at (cx, cy): the image fitted to imgW, with the text under it.
-        func block(cx: CGFloat, cy: CGFloat, imgW: CGFloat, fontSize: CGFloat) {
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: fontSize, weight: .regular),  // light enough to recede
-                .foregroundColor: NSColor.white.withAlphaComponent(opacity),
-            ]
-            let ts = text.isEmpty ? CGSize.zero : (text as NSString).size(withAttributes: attrs)
-            let imgH = wm != nil ? imgW * CGFloat(wm!.height) / CGFloat(wm!.width) : 0
-            let gap: CGFloat = (wm != nil && !text.isEmpty) ? fontSize * 0.3 : 0
-            var top = cy + (imgH + gap + ts.height) / 2
-            if let wm = wm {
-                ctx.saveGState()
-                ctx.setAlpha(opacity)
-                ctx.draw(wm, in: CGRect(x: cx - imgW / 2, y: top - imgH, width: imgW, height: imgH))
-                ctx.restoreGState()
-                top -= imgH + gap
-            }
-            if !text.isEmpty {
-                (text as NSString).draw(at: CGPoint(x: cx - ts.width / 2, y: top - ts.height), withAttributes: attrs)
-            }
-        }
-
-        switch placement {
-        case "center":
-            block(cx: W / 2, cy: H / 2, imgW: min(W, H) * 0.4, fontSize: max(24 * scale, H * 0.05))
-        case "tiled":
-            let imgW = W * 0.11, fontSize = max(11 * scale, H * 0.015)
-            let stepX = max(W / 3.2, imgW * 2), stepY = max(H / 3.2, fontSize * 8)
-            var y = stepY * 0.5
-            while y < H {
-                var x = stepX * 0.5
-                while x < W { block(cx: x, cy: y, imgW: imgW, fontSize: fontSize); x += stepX }
-                y += stepY
-            }
-        default: // bottomRight, tucked above the timestamp corner
-            let imgW = min(W * 0.18, 220 * scale), fontSize = max(10 * scale, H * 0.014)
-            let imgH = wm != nil ? imgW * CGFloat(wm!.height) / CGFloat(wm!.width) : 0
-            let probe: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: fontSize, weight: .regular)]
-            let ts = text.isEmpty ? CGSize.zero : (text as NSString).size(withAttributes: probe)
-            let gap: CGFloat = (wm != nil && !text.isEmpty) ? fontSize * 0.3 : 0
-            let blockW = max(wm != nil ? imgW : 0, ts.width), blockH = imgH + gap + ts.height
-            let margin = fontSize * 1.4
-            block(cx: W - margin - blockW / 2, cy: margin + blockH / 2, imgW: imgW, fontSize: fontSize)
-        }
-        ctx.restoreGState()   // end the soft-light blend
-        NSGraphicsContext.restoreGraphicsState()
-        return ctx.makeImage()
-    }
-}
-
-/// Rounds the capture's corners (transparent outside a rounded rectangle), as the final step so overlays are
-/// clipped with the image. Gated by Prefs.roundCorners; written atomically.
-enum RoundCorners {
-    static func apply(to url: URL) {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let base = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) else { return }
-        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
-        let dpi = (props?[kCGImagePropertyDPIWidth] as? CGFloat) ?? 72
-        let w = base.width, h = base.height
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-        ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
-        let radius = min(CGFloat(w), CGFloat(h)) * 0.025
-        ctx.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: w, height: h), cornerWidth: radius, cornerHeight: radius, transform: nil))
-        ctx.clip()
-        ctx.draw(base, in: CGRect(x: 0, y: 0, width: w, height: h))
-        guard let out = ctx.makeImage() else { return }
-        let tmp = url.deletingLastPathComponent().appendingPathComponent(".rc-\(UUID().uuidString).png")
-        guard let dest = CGImageDestinationCreateWithURL(tmp as CFURL, "public.png" as CFString, 1, nil) else { return }
-        CGImageDestinationAddImage(dest, out, [kCGImagePropertyDPIWidth: dpi, kCGImagePropertyDPIHeight: dpi] as CFDictionary)
-        guard CGImageDestinationFinalize(dest) else { try? FileManager.default.removeItem(at: tmp); return }
-        _ = try? FileManager.default.replaceItemAt(url, withItemAt: tmp)
     }
 }

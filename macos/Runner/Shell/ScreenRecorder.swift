@@ -67,6 +67,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private var appliedExclusions = Set<CGWindowID>()
     private var exclusionBusy = false
     private var microphoneOn = false
+    private var echoMic: EchoCancelledMic?          // the echo-cancelled microphone, while recording with both sounds
+    private var micDiagnostics: [String: Any] = [:]  // how the microphone is captured (status.json "recorder")
     private var finalizing = false                 // the movie is being closed; no new recording until it is done
     private var waiters: [() -> Void] = []
     private var stillsHidingOverlays = 0
@@ -120,8 +122,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// `rect` is in Cocoa global coordinates. `completion` (main thread) tells whether capture began; the first
     /// written frame is announced separately with `.started`.
-    func start(rect: CGRect, microphone: Bool, showClicks: Bool, synthetic: Bool = false, systemAudio: Bool? = nil,
-               completion: @escaping (Bool) -> Void) {
+    func start(rect: CGRect, microphone: Bool, showClicks: Bool, synthetic: Bool = false, systemAudio: Bool? = nil, echoCancel: Bool? = nil,
+               inTestFolder: Bool = false, completion: @escaping (Bool) -> Void) {
         guard !isRecording, !finalizing else { completion(false); return }
         dismissEndedPill()
         guard let screen = NSScreen.screens.max(by: { overlap($0.frame, rect) < overlap($1.frame, rect) }),
@@ -131,7 +133,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         let full = abs(area.width - screen.frame.width) < 2 && abs(area.height - screen.frame.height) < 2
         var movie = CaptureFiles.newCaptureURL(prefix: "SnapNow Recording", ext: "mov")
-        if synthetic, let folder = RecorderTestControl.folder {   // generated test movies stay out of the Library
+        if synthetic || inTestFolder, let folder = RecorderTestControl.folder {   // test movies stay out of the Library
             movie = folder.appendingPathComponent(movie.lastPathComponent)
         }
 
@@ -153,7 +155,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             do {
                 try await self.begin(area: area, screen: screen, displayID: displayID, movie: movie,
                                      microphone: microphone, systemAudio: systemAudio ?? Prefs.onByDefault(Prefs.systemAudio),
-                                     showClicks: showClicks, synthetic: synthetic)
+                                     echoCancel: echoCancel ?? Prefs.onByDefault(Prefs.echoCancel), showClicks: showClicks, synthetic: synthetic)
                 completion(true)
                 if self.stopRequested, let p = self.pendingStop { self.finish(reason: p.reason, source: p.source, done: p.done) }
             } catch {
@@ -182,7 +184,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     @MainActor
     private func begin(area: CGRect, screen: NSScreen, displayID: CGDirectDisplayID, movie: URL,
-                       microphone: Bool, systemAudio: Bool, showClicks: Bool, synthetic: Bool) async throws {
+                       microphone: Bool, systemAudio: Bool, echoCancel: Bool, showClicks: Bool, synthetic: Bool) async throws {
         // `synthetic` (tests only, see RecorderTestControl) feeds generated pictures through the same writer
         // and health check, for a Mac whose display cannot be captured at the moment.
         var display: SCDisplay?
@@ -209,6 +211,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
         var withMic = false
         var withSystem = false
         var config: SCStreamConfiguration?
+        // Both sounds at once: the microphone would hear the speakers, so it is captured through macOS's echo canceller
+        // (EchoCancelledMic) instead of ScreenCaptureKit's raw microphone. One source, or no echo canceller on this Mac: as before.
+        micDiagnostics = [:]
+        if filter != nil, microphone, systemAudio, echoCancel { await startEchoCancelledMic() }
         if filter != nil {
             let c = SCStreamConfiguration()
             // sourceRect is in points from the top-left of the display
@@ -231,12 +237,13 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             }
             if #available(macOS 15.0, *) {
                 c.showMouseClicks = showClicks
-                if microphone { c.captureMicrophone = true; withMic = true }
+                if microphone && echoMic == nil { c.captureMicrophone = true; withMic = true }
             }
             config = c
         }
 
         // The file itself (tracks, fragments, keeping it going on a still screen): MovieWriter
+        if echoMic != nil { withMic = true }
         let w = try MovieWriter(url: movie, width: width, height: height, systemAudio: withSystem, microphone: withMic, quality: quality)
         RecordingMarker.write(movie, started: startedAt ?? Date())
 
@@ -257,6 +264,36 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             if synthetic { self.startSyntheticFrames(width: width, height: height) }
         }
         try await s?.startCapture()
+    }
+
+    /// Starts the echo-cancelled microphone; if this Mac cannot (or the microphone is not allowed), `echoMic` stays nil and the plain
+    /// microphone is used. The audio unit is started off the main thread: bringing voice processing up takes a while and must
+    /// never hold the menu bar.
+    private func startEchoCancelledMic() async {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: break
+        case .notDetermined: guard await AVCaptureDevice.requestAccess(for: .audio) else { micDiagnostics = ["echoCancelled": false, "reason": "microphone not allowed"]; return }
+        default: micDiagnostics = ["echoCancelled": false, "reason": "microphone not allowed"]; return
+        }
+        let mic = EchoCancelledMic { [weak self] sample in
+            self?.queue.async {
+                guard let self, !self.closing, !self.frozen, let m = self.movieWriter else { return }
+                self.callbacks["microphone", default: 0] += 1
+                m.appendAudio(sample, track: .microphone, now: CMClockGetTime(CMClockGetHostTimeClock()))
+            }
+        }
+        let failure: Error? = await withCheckedContinuation { done in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do { try mic.start(); done.resume(returning: nil) } catch { done.resume(returning: error) }
+            }
+        }
+        if let failure {
+            NSLog("SnapNow recorder: echo cancellation unavailable, recording the plain microphone: \(failure)")
+            micDiagnostics = ["echoCancelled": false, "reason": "\(failure)"]
+        } else {
+            echoMic = mic
+            micDiagnostics = ["echoCancelled": true, "inputChannels": Int(mic.inputFormat?.channelCount ?? 0), "inputRate": mic.inputFormat?.sampleRate ?? 0]
+        }
     }
 
     /// Tests only: a moving picture, 30 times a second, delivered like captured frames.
@@ -292,6 +329,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     /// Undoes a start that never got going. The empty file is removed; nothing was recorded.
     private func abandon(_ movie: URL) {
+        echoMic?.stop(); echoMic = nil
         queue.sync {
             beat?.cancel(); beat = nil
             syntheticTimer?.cancel(); syntheticTimer = nil
@@ -370,7 +408,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     /// For the test control's status.json: what the capture delivered and what the movie writer did with it.
     var diagnosticsSnapshot: [String: Any] {
         queue.sync {
-            var d: [String: Any] = ["callbacks": callbacks, "sawIdleFrames": sawIdleFrames,
+            var d: [String: Any] = ["callbacks": callbacks, "sawIdleFrames": sawIdleFrames, "microphone": micDiagnostics,
                                     "secondsSinceCaptureDelivered": min(Date().timeIntervalSince(lastCallback), 1e9)]
             if let m = movieWriter { d["writer"] = m.stats; d["movieSeconds"] = m.seconds; d["encoder"] = m.encoder }
             return d
@@ -584,6 +622,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
     private func close(at stop: CMTime, _ done: @escaping () -> Void) {
         queue.async {
             self.closing = true
+            self.echoMic?.stop(); self.echoMic = nil
             self.beat?.cancel(); self.beat = nil
             self.syntheticTimer?.cancel(); self.syntheticTimer = nil
             guard let m = self.movieWriter else { done(); return }
@@ -980,7 +1019,8 @@ private final class BorderView: NSView {
 /// Settings › Draw mode before the action runs.
 /// Areas are in points from the bottom-left of the main display. "synthetic" feeds generated pictures instead of the
 /// screen (for a Mac whose display cannot be captured right now) and writes the movie next to the command file instead
-/// of into the Library. SNAPNOW_RECORDING_MARKER=<path> moves the recording marker, so recovery can be tried on a file
+/// of into the Library ("inTestFolder" does the same for a real recording; "echoCancel": false records the plain microphone
+/// for comparison). SNAPNOW_RECORDING_MARKER=<path> moves the recording marker, so recovery can be tried on a file
 /// outside the Library.
 enum RecorderTestControl {
     private static let path = ProcessInfo.processInfo.environment["SNAPNOW_TEST_CONTROL"]
@@ -1029,7 +1069,8 @@ enum RecorderTestControl {
             let full = json["fullScreen"] as? Bool ?? false
             let rect = full ? NSScreen.screens[0].frame : area
             Recorder.shared.start(rect: rect, microphone: json["mic"] as? Bool ?? false, showClicks: true,
-                                  synthetic: json["synthetic"] as? Bool ?? false, systemAudio: json["systemAudio"] as? Bool) { ok in
+                                  synthetic: json["synthetic"] as? Bool ?? false, systemAudio: json["systemAudio"] as? Bool,
+                                  echoCancel: json["echoCancel"] as? Bool, inTestFolder: json["inTestFolder"] as? Bool ?? false) { ok in
                 NSLog("SnapNow test: start \(ok ? "ok" : "failed")")
             }
         case "stop": Recorder.shared.stop(source: "test control: stop command")
@@ -1046,6 +1087,9 @@ enum RecorderTestControl {
         case "matrix": MatrixRain.shared.toggle()
         case "icon": Shell.shared.testIconClick()
         case "region": Shell.shared.testRegionCapture(area)
+        case "freeze":   // the picker's freeze and the save of `area`, timed; the picture goes next to the command file, not into the Library
+            guard let folder else { break }
+            RegionCapture.captureArea(area, to: folder.appendingPathComponent("freeze-test.png")) { _ in writeStatus() }
         case "screen": Shell.shared.capture(.screen)
         case "scroll": Shell.shared.testScrollCapture(area)
         case "status": writeStatus()
@@ -1107,6 +1151,7 @@ enum RecorderTestControl {
         status["newestCapture"] = files.max { modified($0) < modified($1) }?.path ?? NSNull()
         if let p = transcriptPath { status["transcript"] = Transcripts.shared.state(p) }
         status["recorder"] = r.diagnosticsSnapshot
+        status["lastFreeze"] = RegionCapture.timings
         status["lastEndReason"] = r.lastEnd ?? NSNull()
         status["recentEnds"] = Recorder.recentEnds(10)
         status["commands"] = handled
