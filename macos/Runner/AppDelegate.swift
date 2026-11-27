@@ -20,6 +20,11 @@ class AppDelegate: FlutterAppDelegate {
     return true
   }
 
+  // ⌘, from the main menu bar. The bar is only up while a regular window is open (the editor or library),
+  // and the stock MainMenu "Settings…" item is wired here (First Responder) so the shortcut works then too;
+  // with no window open the app is menu-bar only and the status-item menu's own item handles ⌘,.
+  @objc func showSettings(_ sender: Any?) { Shell.shared.showSettings() }
+
   // A recording is closed properly before the app goes away (quit, the installer's kill, logout all come here).
   private var quitReplied = false
   override func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
